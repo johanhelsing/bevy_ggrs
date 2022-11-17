@@ -209,6 +209,7 @@ impl<T: Config> GGRSStage<T> {
         }
     }
 
+    #[tracing::instrument(name = "GGRS Snapshot World", skip(self, cell, world))]
     pub(crate) fn save_world(
         &mut self,
         cell: GameStateCell<T::State>,
@@ -229,6 +230,7 @@ impl<T: Config> GGRSStage<T> {
         self.snapshots[pos] = snapshot;
     }
 
+    #[tracing::instrument(name = "GGRS Restore World", skip(self, world))]
     pub(crate) fn load_world(&mut self, frame: i32, world: &mut World) {
         debug!("restoring snapshot for frame {frame}");
         self.frame = frame;
@@ -241,6 +243,7 @@ impl<T: Config> GGRSStage<T> {
         snapshot_to_load.write_to_world(world, &self.type_registry);
     }
 
+    #[tracing::instrument(name = "GGRS Advance Frame", fields(frame = self.frame), skip(self, inputs, world))]
     pub(crate) fn advance_frame(
         &mut self,
         inputs: Vec<(T::Input, InputStatus)>,
