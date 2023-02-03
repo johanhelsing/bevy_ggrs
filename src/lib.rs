@@ -33,9 +33,19 @@ pub struct PlayerInputs<T: Config>(Vec<(T::Input, InputStatus)>);
 
 /// Add this component to all entities you want to be loaded/saved on rollback.
 /// The `id` has to be unique. Consider using the `RollbackIdProvider` resource.
-#[derive(Component)]
+#[derive(Component, Reflect, FromReflect, Debug)]
+#[reflect(Component)]
 pub struct Rollback {
     id: u32,
+}
+
+impl FromWorld for Rollback {
+    fn from_world(world: &mut World) -> Self {
+        let mut rip = world
+            .get_resource_mut::<RollbackIdProvider>()
+            .expect("no rollback id provider");
+        rip.next()
+    }
 }
 
 impl Rollback {
