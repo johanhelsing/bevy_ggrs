@@ -46,10 +46,19 @@ pub struct Player {
 
 // Components that should be saved/loaded need to implement the `Reflect` trait
 #[derive(Default, Reflect, Component)]
+#[reflect(Hash, Component)]
 pub struct Velocity {
     pub x: f32,
     pub y: f32,
     pub z: f32,
+}
+
+impl Hash for Velocity {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.x.to_bits().hash(state);
+        self.y.to_bits().hash(state);
+        self.z.to_bits().hash(state);
+    }
 }
 
 // You can also register resources.
