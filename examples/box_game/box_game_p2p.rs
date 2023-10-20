@@ -88,11 +88,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             2.0,
             TimerMode::Repeating,
         )))
+        .add_systems(Update, cause_desync)
         .add_systems(Update, print_network_stats_system)
         .add_systems(Update, print_events_system)
         .run();
 
     Ok(())
+}
+
+fn cause_desync(keys: Res<Input<KeyCode>>, mut players: Query<&mut Velocity, With<Player>>) {
+    if keys.just_pressed(KeyCode::Space) {
+        for mut velocity in &mut players {
+            velocity.x = 1.;
+            velocity.y = 2.;
+            velocity.z = 3.;
+        }
+    }
 }
 
 fn print_events_system(mut session: ResMut<Session<GgrsConfig>>) {
