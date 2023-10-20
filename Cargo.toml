@@ -20,7 +20,8 @@ bevy = { version = "0.11", default-features = false}
 bytemuck = { version = "1.7", features=["derive"]}
 instant = { version = "0.1", optional = true }
 log = "0.4"
-ggrs = { version= "0.9.4", features=["sync-send"]}
+# ggrs = { version= "0.9.4", features=["sync-send"]}
+ggrs = { git = "https://github.com/johanhelsing/ggrs", features=["sync-send"], branch = "fix-desync-false-positives" }
 #ggrs = { git = "https://github.com/gschup/ggrs", features=["sync-send"]}
 parking_lot = "0.12.1"
 
