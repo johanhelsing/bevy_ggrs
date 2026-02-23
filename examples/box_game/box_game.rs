@@ -1,7 +1,7 @@
 use bevy::{platform::collections::HashMap, prelude::*};
 use bevy_ggrs::{
-    DeriveRollback, GgrsConfig, LocalInputs, LocalPlayers, PlayerInputs, ReflectRollback,
-    RollbackId, Session,
+    GgrsConfig, LocalInputs, LocalPlayers, PlayerInputs, ReflectRollback, Rollback, RollbackId,
+    Session,
 };
 use serde::{Deserialize, Serialize};
 use std::hash::Hash;
@@ -41,13 +41,13 @@ pub struct Player {
 // - clone
 // - reflect
 // The `marker` flag registers entity tracking, so you don't need to add `Rollback` to spawn bundles.
-#[derive(Default, Reflect, Component, Clone, Copy, Deref, DerefMut, DeriveRollback)]
+#[derive(Default, Reflect, Component, Clone, Copy, Deref, DerefMut, Rollback)]
 #[rollback(copy, marker)]
 #[reflect(Rollback)]
 pub struct Velocity(pub Vec3);
 
 // Resources work the same way.
-#[derive(Resource, Default, Reflect, Hash, Clone, Copy, DeriveRollback)]
+#[derive(Resource, Default, Reflect, Hash, Clone, Copy, Rollback)]
 #[rollback(resource, copy, checksum)]
 #[reflect(Hash, Rollback)]
 pub struct FrameCount {

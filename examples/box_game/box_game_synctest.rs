@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .add_systems(ReadInputs, read_local_inputs)
         .insert_resource(opt)
         .add_plugins(DefaultPlugins)
-        // Velocity and FrameCount use #[derive(DeriveRollback)] with #[reflect(Rollback)],
+        // Velocity and FrameCount use #[derive(Rollback)] with #[reflect(Rollback)],
         // so they are auto-registered. Transform is a third-party type, so we register it manually.
         .rollback_component_with_clone::<Transform>()
         .add_systems(Startup, setup_system)

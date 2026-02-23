@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .insert_resource(RollbackFrameRate(FPS))
         // this system will be executed as part of input reading
         .add_systems(ReadInputs, read_local_inputs)
-        // Velocity and FrameCount use #[derive(DeriveRollback)] with #[reflect(Rollback)],
+        // Velocity and FrameCount use #[derive(Rollback)] with #[reflect(Rollback)],
         // so they are auto-registered. Transform is a third-party type, so we register it manually.
         .rollback_component_with_clone::<Transform>()
         .insert_resource(opt)
