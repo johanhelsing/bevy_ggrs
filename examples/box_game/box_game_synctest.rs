@@ -43,19 +43,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .add_systems(ReadInputs, read_local_inputs)
         .insert_resource(opt)
         .add_plugins(DefaultPlugins)
-        // Rollback behavior can be customized using a variety of extension methods and plugins:
-        // The FrameCount resource implements Copy, we can use that to have minimal overhead rollback
-        .rollback_resource_with_copy::<FrameCount>()
-        // Same with the Velocity Component
-        .rollback_component_with_copy::<Velocity>()
-        // Transform only implement Clone, so instead we'll use that to snapshot and rollback with
+        // Velocity and FrameCount use #[derive(DeriveRollback)] with #[reflect(Rollback)],
+        // so they are auto-registered. Transform is a third-party type, so we register it manually.
         .rollback_component_with_clone::<Transform>()
         .add_systems(Startup, setup_system)
         // these systems will be executed as part of the advance frame update
         .add_systems(GgrsSchedule, (move_cube_system, increase_frame_system))
         // add your GGRS session
         .insert_resource(Session::SyncTest(sess))
-        // register a resource that will be rolled back
         .insert_resource(FrameCount { frame: 0 })
         .run();
 

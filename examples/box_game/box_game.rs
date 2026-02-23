@@ -1,5 +1,8 @@
 use bevy::{platform::collections::HashMap, prelude::*};
-use bevy_ggrs::{GgrsConfig, LocalInputs, LocalPlayers, PlayerInputs, Rollback, Session};
+use bevy_ggrs::{
+    DeriveRollback, GgrsConfig, LocalInputs, LocalPlayers, PlayerInputs, ReflectRollback,
+    RollbackId, Session,
+};
 use serde::{Deserialize, Serialize};
 use std::hash::Hash;
 
@@ -33,17 +36,20 @@ pub struct Player {
     pub handle: usize,
 }
 
-// Components that should be saved/loaded need to support snapshotting. The built-in options are:
-// - Clone (Recommended)
-// - Copy
-// - Reflect
-// See `bevy_ggrs::Strategy` for custom alternatives
-#[derive(Default, Reflect, Component, Clone, Copy, Deref, DerefMut)]
+// Components that should be saved/loaded need to support snapshotting. The built-in strategies are:
+// - copy
+// - clone
+// - reflect
+// The `marker` flag registers entity tracking, so you don't need to add `Rollback` to spawn bundles.
+#[derive(Default, Reflect, Component, Clone, Copy, Deref, DerefMut, DeriveRollback)]
+#[rollback(copy, marker)]
+#[reflect(Rollback)]
 pub struct Velocity(pub Vec3);
 
-// You can also register resources.
-#[derive(Resource, Default, Reflect, Hash, Clone, Copy)]
-#[reflect(Hash)]
+// Resources work the same way.
+#[derive(Resource, Default, Reflect, Hash, Clone, Copy, DeriveRollback)]
+#[rollback(resource, copy, checksum)]
+#[reflect(Hash, Rollback)]
 pub struct FrameCount {
     pub frame: u32,
 }
@@ -110,18 +116,14 @@ pub fn setup_system(
         transform.translation.z = z;
         let color = PLAYER_COLORS[handle % PLAYER_COLORS.len()];
 
-        // Entities which will be rolled back can be created just like any other...
+        // Entities which will be rolled back can be created just like any other.
+        // The `marker` flag on Velocity automatically creates a RollbackId for the entity.
         commands.spawn((
-            // ...add visual information...
             Mesh3d(mesh.clone()),
             MeshMaterial3d(materials.add(StandardMaterial::from(color))),
             transform,
-            // ...flags...
             Player { handle },
-            // ...and components which will be rolled-back...
             Velocity::default(),
-            // The Rollback marker ensures a stable ID is available for the rollback system
-            Rollback,
         ));
     }
 
@@ -143,11 +145,11 @@ pub fn increase_frame_system(mut frame_count: ResMut<FrameCount>) {
 }
 
 // Example system that moves the cubes, will be added to the rollback schedule.
-// Filtering for the rollback component is a good way to make sure your game logic systems
+// Filtering for RollbackId is a good way to make sure your game logic systems
 // only mutate components that are being saved/loaded.
 #[allow(dead_code)]
 pub fn move_cube_system(
-    mut query: Query<(&mut Transform, &mut Velocity, &Player), With<Rollback>>,
+    mut query: Query<(&mut Transform, &mut Velocity, &Player), With<RollbackId>>,
     inputs: Res<PlayerInputs<BoxConfig>>,
     // Thanks to RollbackTimePlugin, this is rollback safe
     time: Res<Time>,
