@@ -1,0 +1,15 @@
+[package]
+name = "bevy_ggrs_derive"
+version = "0.20.0"
+edition = "2024"
+description = "Derive macros for bevy_ggrs"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/gschup/bevy_ggrs"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"

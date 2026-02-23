@@ -1,5 +1,8 @@
 use crate::DEFAULT_FPS;
-use bevy::{ecs::schedule::ScheduleLabel, platform::collections::HashMap, prelude::*};
+use bevy::{
+    ecs::reflect::AppTypeRegistry, ecs::schedule::ScheduleLabel, platform::collections::HashMap,
+    prelude::*,
+};
 use seahash::SeaHasher;
 use std::{collections::VecDeque, marker::PhantomData};
 
@@ -15,6 +18,7 @@ mod resource_map;
 mod resource_snapshot;
 mod rollback;
 mod rollback_app;
+mod rollback_entity;
 mod rollback_entity_map;
 mod set;
 mod strategy;
@@ -31,6 +35,7 @@ pub use resource_map::*;
 pub use resource_snapshot::*;
 pub use rollback::*;
 pub use rollback_app::*;
+pub use rollback_entity::*;
 pub use rollback_entity_map::*;
 pub use set::*;
 pub use strategy::*;
@@ -305,6 +310,27 @@ impl Plugin for SnapshotPlugin {
                 ResourceSnapshotPlugin::<CloneStrategy<RollbackOrdered>>::default(),
                 ChildOfSnapshotPlugin,
             ));
+    }
+
+    fn finish(&self, app: &mut App) {
+        if app.world().contains_resource::<SkipAutoRegistration>() {
+            return;
+        }
+
+        let Some(registry) = app.world().get_resource::<AppTypeRegistry>() else {
+            return;
+        };
+
+        let registry = registry.read();
+        let registrations: Vec<fn(&mut App)> = registry
+            .iter_with_data::<ReflectRollback>()
+            .map(|(_, data)| data.register_fn)
+            .collect();
+        drop(registry);
+
+        for register_fn in registrations {
+            (register_fn)(app);
+        }
     }
 }
 
