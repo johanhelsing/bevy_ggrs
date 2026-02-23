@@ -4,7 +4,7 @@ use bevy::{
     prelude::*,
 };
 use seahash::SeaHasher;
-use std::{collections::VecDeque, marker::PhantomData};
+use std::marker::PhantomData;
 
 mod checksum;
 mod childof_snapshot;
@@ -87,143 +87,97 @@ pub type GgrsComponentSnapshots<C, As = C> = GgrsSnapshots<C, GgrsComponentSnaps
 /// Collection of snapshots for a type `For`, stored as `As`
 #[derive(Resource)]
 pub struct GgrsSnapshots<For, As = For> {
-    /// Queue of snapshots, newest at the front, oldest at the back.
-    /// Separate from `frames`` to avoid padding.
-    snapshots: VecDeque<As>,
-    /// Queue of frames, newest at the front, oldest at the back.
-    /// Separate from `snapshots`` to avoid padding.
-    frames: VecDeque<i32>,
-    /// Maximum amount of snapshots to store at any one time
-    depth: usize,
+    snapshots: HashMap<i32, As>,
+    /// Maximum number of snapshots to store. `None` means unbounded.
+    depth: Option<usize>,
+    /// The frame selected by `rollback()`, used by `get()`.
+    current_frame: Option<i32>,
     _phantom: PhantomData<For>,
 }
 
 impl<For, As> Default for GgrsSnapshots<For, As> {
     fn default() -> Self {
         Self {
-            snapshots: VecDeque::with_capacity(DEFAULT_FPS),
-            frames: VecDeque::with_capacity(DEFAULT_FPS),
-            depth: DEFAULT_FPS, // TODO: Make sensible choice here
+            snapshots: HashMap::with_capacity(DEFAULT_FPS),
+            depth: Some(DEFAULT_FPS),
+            current_frame: None,
             _phantom: default(),
         }
     }
 }
 
 impl<For, As> GgrsSnapshots<For, As> {
-    /// Updates the capacity of this storage to the provided depth.
+    /// Updates the maximum number of snapshots to store, pre-allocating capacity.
     pub fn set_depth(&mut self, depth: usize) -> &mut Self {
-        self.depth = depth;
+        self.depth = Some(depth);
 
         // Greedy allocation to avoid allocating at a more sensitive time.
-        if self.snapshots.capacity() < self.depth {
-            let additional = self.depth - self.snapshots.capacity();
+        if self.snapshots.capacity() < depth {
+            let additional = depth - self.snapshots.capacity();
             self.snapshots.reserve(additional);
         }
 
-        if self.frames.capacity() < self.depth {
-            let additional = self.depth - self.frames.capacity();
-            self.frames.reserve(additional);
-        }
-
         self
     }
 
-    /// Get the current capacity of this snapshot storage.
-    pub const fn depth(&self) -> usize {
+    /// Removes the snapshot depth limit, allowing unbounded storage.
+    pub fn set_unbounded(&mut self) -> &mut Self {
+        self.depth = None;
+        self
+    }
+
+    /// Get the current depth limit of this snapshot storage, or `None` if unbounded.
+    pub const fn depth(&self) -> Option<usize> {
         self.depth
     }
 
-    /// Push a new snapshot for the provided frame. If the frame is earlier than any
-    /// currently stored snapshots, those snapshots will be discarded.
+    /// Store a snapshot for the provided frame, replacing any existing snapshot at that frame.
+    /// If the number of stored snapshots exceeds `depth`, the oldest frame is evicted.
     pub fn push(&mut self, frame: i32, snapshot: As) -> &mut Self {
-        debug_assert_eq!(
-            self.snapshots.len(),
-            self.frames.len(),
-            "Snapshot and Frame queues must always be in sync"
-        );
+        self.snapshots.insert(frame, snapshot);
 
-        loop {
-            let Some(&current) = self.frames.front() else {
-                break;
-            };
-
-            // Handle the possibility of wrapping i32
-            let wrapped = current.abs_diff(frame) > u32::MAX / 2;
-            let current_after_frame = current >= frame && !wrapped;
-            let current_after_frame_wrapped = frame >= current && wrapped;
-
-            if current_after_frame || current_after_frame_wrapped {
-                self.snapshots.pop_front().unwrap();
-                self.frames.pop_front().unwrap();
-            } else {
-                break;
+        if let Some(depth) = self.depth {
+            while self.snapshots.len() > depth {
+                if let Some(&oldest) = self.snapshots.keys().min() {
+                    self.snapshots.remove(&oldest);
+                } else {
+                    break;
+                }
             }
-        }
-
-        self.snapshots.push_front(snapshot);
-        self.frames.push_front(frame);
-
-        while self.snapshots.len() > self.depth {
-            self.snapshots.pop_back().unwrap();
-            self.frames.pop_back().unwrap();
         }
 
         self
     }
 
-    /// Confirms a snapshot as being stable across clients. Snapshots from before this
-    /// point are discarded as no longer required.
+    /// Discards snapshots from before `confirmed_frame` as no longer required.
     pub fn confirm(&mut self, confirmed_frame: i32) -> &mut Self {
-        debug_assert_eq!(
-            self.snapshots.len(),
-            self.frames.len(),
-            "Snapshot and Frame queues must always be in sync"
-        );
-
-        while let Some(&frame) = self.frames.back() {
-            if frame < confirmed_frame {
-                self.snapshots.pop_back().unwrap();
-                self.frames.pop_back().unwrap();
-            } else {
-                break;
-            }
-        }
-
+        self.snapshots.retain(|&frame, _| frame >= confirmed_frame);
         self
     }
 
-    /// Rolls back to the provided frame, discarding snapshots taken after the rollback point.
+    /// Selects a frame to rollback to. Use `get()` to retrieve the snapshot.
     pub fn rollback(&mut self, frame: i32) -> &mut Self {
-        loop {
-            let Some(&current) = self.frames.front() else {
-                // TODO: A panic may not be appropriate here, but suitable for now.
-                panic!("Could not rollback to {frame}: no snapshot at that moment could be found.");
-            };
-
-            if current != frame {
-                self.snapshots.pop_front().unwrap();
-                self.frames.pop_front().unwrap();
-            } else {
-                break;
-            }
-        }
-
+        assert!(
+            self.snapshots.contains_key(&frame),
+            "Could not rollback to {frame}: no snapshot at that moment could be found."
+        );
+        self.current_frame = Some(frame);
         self
     }
 
-    /// Get the current snapshot. Use `rollback(frame)` to first select a frame to rollback to.
+    /// Get the snapshot for the frame selected by `rollback()`.
     pub fn get(&self) -> &As {
-        self.snapshots.front().unwrap()
+        let frame = self
+            .current_frame
+            .expect("No frame selected. Call rollback() before get().");
+        self.snapshots
+            .get(&frame)
+            .expect("Snapshot missing for selected frame")
     }
 
-    /// Get a particular snapshot if it exists.
+    /// Get a snapshot for a specific frame, if it exists.
     pub fn peek(&self, frame: i32) -> Option<&As> {
-        let (index, _) = self
-            .frames
-            .iter()
-            .enumerate()
-            .find(|&(_, &saved_frame)| saved_frame == frame)?;
-        self.snapshots.get(index)
+        self.snapshots.get(&frame)
     }
 
     /// A system which automatically confirms the [`ConfirmedFrameCount`], discarding older snapshots.
