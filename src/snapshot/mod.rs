@@ -98,12 +98,14 @@ pub type GgrsResourceSnapshots<R, As = R> = GgrsSnapshots<R, Option<As>>;
 /// For most types, the default `As = C` will suffice.
 pub type GgrsComponentSnapshots<C, As = C> = GgrsSnapshots<C, GgrsComponentSnapshot<C, As>>;
 
-/// Collection of snapshots for a type `For`, stored as `As`
+/// Collection of snapshots for a type `For`, stored as `As`.
+///
+/// Snapshot depth (how many frames to retain) is controlled globally via
+/// [`SnapshotDepth`], not per-storage. Eviction happens in
+/// [`discard_old_snapshots`](Self::discard_old_snapshots).
 #[derive(Resource)]
 pub struct GgrsSnapshots<For, As = For> {
     snapshots: HashMap<i32, As>,
-    /// Maximum number of snapshots to store. `None` means unbounded.
-    depth: Option<usize>,
     /// The frame selected by `rollback()`, used by `get()`.
     current_frame: Option<i32>,
     _phantom: PhantomData<For>,
@@ -112,55 +114,29 @@ pub struct GgrsSnapshots<For, As = For> {
 impl<For, As> Default for GgrsSnapshots<For, As> {
     fn default() -> Self {
         Self {
-            snapshots: HashMap::with_capacity(DEFAULT_FPS),
-            depth: Some(DEFAULT_FPS),
+            snapshots: HashMap::default(),
             current_frame: None,
-            _phantom: default(),
+            _phantom: PhantomData,
         }
     }
 }
 
 impl<For, As> GgrsSnapshots<For, As> {
-    /// Updates the maximum number of snapshots to store, pre-allocating capacity.
-    pub fn set_depth(&mut self, depth: usize) -> &mut Self {
-        self.depth = Some(depth);
-
-        // Greedy allocation to avoid allocating at a more sensitive time.
-        if self.snapshots.capacity() < depth {
-            let additional = depth - self.snapshots.capacity();
-            self.snapshots.reserve(additional);
-        }
-
-        self
-    }
-
-    /// Removes the snapshot depth limit, allowing unbounded storage.
-    pub fn set_unbounded(&mut self) -> &mut Self {
-        self.depth = None;
-        self
-    }
-
-    /// Get the current depth limit of this snapshot storage, or `None` if unbounded.
-    pub const fn depth(&self) -> Option<usize> {
-        self.depth
-    }
-
-    /// Store a snapshot for the provided frame, replacing any existing snapshot at that frame.
-    /// If the number of stored snapshots exceeds `depth`, the oldest frame is evicted.
+    /// Store a snapshot for the provided frame, replacing any existing snapshot.
     pub fn push(&mut self, frame: i32, snapshot: As) -> &mut Self {
         self.snapshots.insert(frame, snapshot);
+        self
+    }
 
-        if let Some(depth) = self.depth {
-            while self.snapshots.len() > depth {
-                if let Some(&oldest) = self.snapshots.keys().min() {
-                    self.snapshots.remove(&oldest);
-                } else {
-                    break;
-                }
+    /// Evict snapshots beyond the depth limit, keeping only the most recent `depth` frames.
+    pub fn evict(&mut self, depth: usize) {
+        while self.snapshots.len() > depth {
+            if let Some(&oldest) = self.snapshots.keys().min() {
+                self.snapshots.remove(&oldest);
+            } else {
+                break;
             }
         }
-
-        self
     }
 
     /// Discards snapshots from before `confirmed_frame` as no longer required.
@@ -194,19 +170,23 @@ impl<For, As> GgrsSnapshots<For, As> {
         self.snapshots.get(&frame)
     }
 
-    /// A system which automatically confirms the [`ConfirmedFrameCount`], discarding older snapshots.
+    /// A system which evicts old snapshots based on [`SnapshotDepth`] and
+    /// confirms the [`ConfirmedFrameCount`].
     pub fn discard_old_snapshots(
         mut snapshots: ResMut<Self>,
+        depth: Res<SnapshotDepth>,
         confirmed_frame: Option<Res<ConfirmedFrameCount>>,
     ) where
         For: Send + Sync + 'static,
         As: Send + Sync + 'static,
     {
-        let Some(confirmed_frame) = confirmed_frame else {
-            return;
-        };
+        if let Some(max) = depth.0 {
+            snapshots.evict(max);
+        }
 
-        snapshots.confirm(confirmed_frame.0);
+        if let Some(confirmed_frame) = confirmed_frame {
+            snapshots.confirm(confirmed_frame.0);
+        }
     }
 
     /// A system which syncs the snapshot depth to [`MaxPredictionWindow`].
@@ -271,9 +251,28 @@ pub fn checksum_hasher() -> SeaHasher {
     SeaHasher::new()
 }
 
+/// Global snapshot depth limit. `None` means unbounded.
+///
+/// Defaults to `Some(60)` (~1 second at 60 fps). Insert this resource
+/// before adding [`SnapshotPlugin`] to override the default, or mutate it
+/// at runtime.
+///
+/// Read by [`discard_old_snapshots`](GgrsSnapshots::discard_old_snapshots).
+#[derive(Resource)]
+pub struct SnapshotDepth(pub Option<usize>);
+
+impl Default for SnapshotDepth {
+    fn default() -> Self {
+        Self(Some(DEFAULT_FPS))
+    }
+}
+
 /// This plugin sets up the [`LoadWorld`], [`SaveWorld`], and [`AdvanceWorld`]
 /// schedules and adds the required systems and resources for basic rollback
 /// functionality.
+///
+/// Snapshot depth is controlled via the [`SnapshotDepth`] resource.
+/// Insert it before adding this plugin to override the default (60 frames).
 ///
 /// This is independent of the GGRS plugin and can be used with any Bevy app,
 /// including tests and benchmarks.
@@ -282,6 +281,7 @@ pub struct SnapshotPlugin;
 impl Plugin for SnapshotPlugin {
     /// Registers the rollback schedules, frame-count resources, and core snapshot plugins.
     fn build(&self, app: &mut App) {
+        app.init_resource::<SnapshotDepth>();
         app.add_plugins(SnapshotSetPlugin)
             .init_resource::<RollbackOrdered>()
             .init_resource::<RollbackFrameCount>()
