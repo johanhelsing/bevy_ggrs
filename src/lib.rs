@@ -20,7 +20,7 @@ use ggrs::{Config, InputStatus, P2PSession, PlayerHandle, SpectatorSession, Sync
 use serde::{Deserialize, Serialize};
 use std::{fmt::Debug, hash::Hash, marker::PhantomData, net::SocketAddr};
 
-pub use bevy_ggrs_derive::Rollback as DeriveRollback;
+pub use bevy_ggrs_derive::Rollback;
 pub use snapshot::*;
 pub use time::*;
 
@@ -31,9 +31,9 @@ pub(crate) mod time;
 /// Convenient re-exports of the most commonly used types. Glob-import this to get started.
 pub mod prelude {
     pub use crate::{
-        DeriveRollback, GgrsConfig, GgrsPlugin, GgrsSchedule, GgrsTime, PlayerInputs, ReadInputs,
-        ReflectRollback, Rollback, RollbackApp, RollbackFrameRate, RollbackId,
-        RollbackRegistration, Session, SyncTestMismatch, snapshot::prelude::*,
+        GgrsConfig, GgrsPlugin, GgrsSchedule, GgrsTime, PlayerInputs, ReadInputs, ReflectRollback,
+        Rollback, RollbackApp, RollbackFrameRate, RollbackId, RollbackRegistration, Session,
+        SyncTestMismatch, snapshot::prelude::*,
     };
     pub use ggrs::{GgrsEvent, PlayerType, SessionBuilder};
 }

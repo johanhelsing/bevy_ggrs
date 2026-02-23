@@ -13,13 +13,13 @@ impl Config for TestConfig {
 }
 
 // Test the derive macro with explicit app.rollback::<T>() path
-#[derive(Component, Clone, Copy, DeriveRollback)]
+#[derive(Component, Clone, Copy, Rollback)]
 #[rollback(copy, marker)]
 struct Player {
     score: u32,
 }
 
-#[derive(Resource, Clone, DeriveRollback, Default)]
+#[derive(Resource, Clone, Rollback, Default)]
 #[rollback(resource, clone)]
 struct GameState {
     round: u32,
@@ -45,16 +45,16 @@ fn advance_round(mut state: ResMut<GameState>) {
     state.round += 1;
 }
 
-// Auto-registration types: Reflect + DeriveRollback + #[reflect(Rollback)]
+// Auto-registration types: Reflect + Rollback + #[reflect(Rollback)]
 // These should be auto-discovered by SnapshotPlugin::finish()
-#[derive(Component, Clone, Copy, Reflect, DeriveRollback)]
+#[derive(Component, Clone, Copy, Reflect, Rollback)]
 #[rollback(copy, marker)]
 #[reflect(Rollback)]
 struct AutoPlayer {
     health: u32,
 }
 
-#[derive(Resource, Clone, Reflect, DeriveRollback, Default)]
+#[derive(Resource, Clone, Reflect, Rollback, Default)]
 #[rollback(resource, clone)]
 #[reflect(Rollback)]
 struct AutoScore {
