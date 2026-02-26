@@ -68,13 +68,11 @@ pub(crate) fn run_ggrs_schedules<T: Config>(world: &mut World) {
             }
             Some(Session::Spectator(s)) => run_spectator(world, s),
             _ => {
-                // No session has been started yet, reset time data and snapshots
+                // No active session, nothing to do. Leave world state untouched
+                // so a local runner or other systems can drive the simulation.
                 time_data.accumulator = Duration::ZERO;
                 time_data.run_slow = false;
-                world.insert_resource(LocalPlayers::default());
-                world.insert_resource(RollbackFrameCount(0));
-                world.insert_resource(ConfirmedFrameCount(-1));
-                world.insert_resource(MaxPredictionWindow(8));
+                break;
             }
         }
     }
