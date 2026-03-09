@@ -11,7 +11,9 @@
 
 use crate::{DEFAULT_FPS, MaxPredictionWindow};
 use bevy::{
-    ecs::reflect::AppTypeRegistry, ecs::schedule::ScheduleLabel, platform::collections::HashMap,
+    ecs::reflect::AppTypeRegistry,
+    ecs::schedule::ScheduleLabel,
+    platform::collections::{HashMap, HashSet},
     prelude::*,
 };
 use seahash::SeaHasher;
@@ -128,10 +130,13 @@ impl<For, As> GgrsSnapshots<For, As> {
         self
     }
 
-    /// Evict snapshots beyond the depth limit, keeping only the most recent `depth` frames.
-    pub fn evict(&mut self, depth: usize) {
-        while self.snapshots.len() > depth {
-            if let Some(&oldest) = self.snapshots.keys().min() {
+    /// Evict snapshots beyond the depth limit, keeping only the most recent `depth` unpinned frames.
+    ///
+    /// Pinned frames are never evicted regardless of the depth limit.
+    pub fn evict(&mut self, depth: usize, pinned: &HashSet<i32>) {
+        let is_unpinned = |f: &&i32| !pinned.contains(*f);
+        while self.snapshots.keys().filter(is_unpinned).count() > depth {
+            if let Some(&oldest) = self.snapshots.keys().filter(is_unpinned).min() {
                 self.snapshots.remove(&oldest);
             } else {
                 break;
@@ -139,9 +144,10 @@ impl<For, As> GgrsSnapshots<For, As> {
         }
     }
 
-    /// Discards snapshots from before `confirmed_frame` as no longer required.
-    pub fn confirm(&mut self, confirmed_frame: i32) -> &mut Self {
-        self.snapshots.retain(|&frame, _| frame >= confirmed_frame);
+    /// Discards unpinned snapshots from before `confirmed_frame` as no longer required.
+    pub fn confirm(&mut self, confirmed_frame: i32, pinned: &HashSet<i32>) -> &mut Self {
+        self.snapshots
+            .retain(|&frame, _| frame >= confirmed_frame || pinned.contains(&frame));
         self
     }
 
@@ -171,21 +177,23 @@ impl<For, As> GgrsSnapshots<For, As> {
     }
 
     /// A system which evicts old snapshots based on [`SnapshotDepth`] and
-    /// confirms the [`ConfirmedFrameCount`].
+    /// confirms the [`ConfirmedFrameCount`]. Pinned frames (via [`PinnedFrames`])
+    /// are never evicted or confirmed away.
     pub fn discard_old_snapshots(
         mut snapshots: ResMut<Self>,
         depth: Res<SnapshotDepth>,
+        pinned: Res<PinnedFrames>,
         confirmed_frame: Option<Res<ConfirmedFrameCount>>,
     ) where
         For: Send + Sync + 'static,
         As: Send + Sync + 'static,
     {
         if let Some(max) = depth.0 {
-            snapshots.evict(max);
+            snapshots.evict(max, &pinned);
         }
 
         if let Some(confirmed_frame) = confirmed_frame {
-            snapshots.confirm(confirmed_frame.0);
+            snapshots.confirm(confirmed_frame.0, &pinned);
         }
     }
 
@@ -261,6 +269,18 @@ pub fn checksum_hasher() -> SeaHasher {
 #[derive(Resource)]
 pub struct SnapshotDepth(pub Option<usize>);
 
+/// Set of frame numbers that should never be evicted by
+/// [`discard_old_snapshots`](GgrsSnapshots::discard_old_snapshots).
+///
+/// Use this to implement sparse checkpoint systems: pin a frame every N ticks
+/// so that seeking backward can load a nearby checkpoint and resimulate forward.
+///
+/// The dense rolling window ([`SnapshotDepth`]) and pinned frames are independent:
+/// `evict()` only counts unpinned frames against the depth limit.
+#[derive(Resource, Default, Debug, Clone, Deref, DerefMut, Reflect)]
+#[reflect(Resource)]
+pub struct PinnedFrames(pub HashSet<i32>);
+
 impl Default for SnapshotDepth {
     fn default() -> Self {
         Self(Some(DEFAULT_FPS))
@@ -282,6 +302,8 @@ impl Plugin for SnapshotPlugin {
     /// Registers the rollback schedules, frame-count resources, and core snapshot plugins.
     fn build(&self, app: &mut App) {
         app.init_resource::<SnapshotDepth>();
+        app.init_resource::<PinnedFrames>();
+        app.register_type::<PinnedFrames>();
         app.add_plugins(SnapshotSetPlugin)
             .init_resource::<RollbackOrdered>()
             .init_resource::<RollbackFrameCount>()
