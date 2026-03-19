@@ -261,6 +261,11 @@ impl<C: Config> Plugin for GgrsPlugin<C> {
         // Auto-reset rollback state when a new session is inserted.
         // This prevents stale snapshots/frame counts from a previous session
         // from causing rollback panics in the new session.
+        //
+        // This works because `resource_scope` in `run_ggrs_schedules` preserves
+        // change detection ticks when re-inserting Session each frame, so
+        // `resource_added` only fires once when the consumer genuinely inserts
+        // a new Session.
         app.add_systems(
             self.schedule,
             reset_rollback_state::<C>
@@ -270,14 +275,15 @@ impl<C: Config> Plugin for GgrsPlugin<C> {
     }
 }
 
-/// Reset rollback state when a new [`Session`] is inserted.
+/// Resets rollback state when a new [`Session`] is inserted.
 ///
-/// Clears all snapshot stores, resets the frame counter, and removes
-/// the stale confirmed frame so that the new session starts fresh.
+/// Clears all snapshot stores, resets the frame counter, and removes the
+/// stale confirmed frame count so that the new session starts clean.
 fn reset_rollback_state<C: Config>(world: &mut World) {
+    let old_frame = world.resource::<RollbackFrameCount>().0;
     world.resource_mut::<RollbackFrameCount>().0 = 0;
     world.remove_resource::<ConfirmedFrameCount>();
     world.trigger(ClearSnapshots);
     world.insert_resource(Time::new_with(GgrsTime));
-    debug!("Reset rollback state for new session");
+    info!("Reset rollback state for new session (was at frame {old_frame})");
 }

@@ -56,31 +56,36 @@ pub(crate) fn run_ggrs_schedules<T: Config>(world: &mut World) {
         // decrease accumulator
         time_data.accumulator = time_data.accumulator.saturating_sub(fps_delta);
 
-        // depending on the session type, doing a single update looks a bit different
-        let session = world.remove_resource::<Session<T>>();
-        match session {
-            Some(Session::SyncTest(s)) => run_synctest::<T>(world, s),
-            Some(Session::P2P(session)) => {
-                // if we are ahead, run slow
-                time_data.run_slow = session.frames_ahead() > 0;
-
-                run_p2p(world, session);
-            }
-            Some(Session::Spectator(s)) => run_spectator(world, s),
-            _ => {
-                // No active session, nothing to do. Leave world state untouched
-                // so a local runner or other systems can drive the simulation.
-                time_data.accumulator = Duration::ZERO;
-                time_data.run_slow = false;
-                break;
-            }
+        // No active session — leave world state untouched so a local runner
+        // or other systems can drive the simulation.
+        if !world.contains_resource::<Session<T>>() {
+            time_data.accumulator = Duration::ZERO;
+            time_data.run_slow = false;
+            break;
         }
+
+        // resource_scope temporarily removes the Session while giving us
+        // mutable access to both it and the World, then re-inserts it
+        // preserving change detection ticks (so `resource_added` only fires
+        // once when the consumer inserts it, not every frame).
+        world.resource_scope(|world, mut session: Mut<Session<T>>| {
+            match &mut *session {
+                Session::SyncTest(s) => run_synctest::<T>(world, s),
+                Session::P2P(session) => {
+                    // if we are ahead, run slow
+                    time_data.run_slow = session.frames_ahead() > 0;
+
+                    run_p2p(world, session);
+                }
+                Session::Spectator(s) => run_spectator(world, s),
+            }
+        });
     }
 
     world.insert_resource(time_data);
 }
 
-pub(crate) fn run_synctest<C: Config>(world: &mut World, mut sess: SyncTestSession<C>) {
+pub(crate) fn run_synctest<C: Config>(world: &mut World, sess: &mut SyncTestSession<C>) {
     world.insert_resource(LocalPlayers((0..sess.num_players()).collect()));
 
     // read local player inputs and register them in the session
@@ -94,8 +99,6 @@ pub(crate) fn run_synctest<C: Config>(world: &mut World, mut sess: SyncTestSessi
     }
 
     let requests = sess.advance_frame();
-
-    world.insert_resource(Session::SyncTest(sess));
 
     match requests {
         Ok(requests) => handle_requests(requests, world),
@@ -115,12 +118,10 @@ pub(crate) fn run_synctest<C: Config>(world: &mut World, mut sess: SyncTestSessi
     }
 }
 
-pub(crate) fn run_spectator<T: Config>(world: &mut World, mut sess: SpectatorSession<T>) {
+pub(crate) fn run_spectator<T: Config>(world: &mut World, sess: &mut SpectatorSession<T>) {
     // if session is ready, try to advance the frame
     let running = sess.current_state() == SessionState::Running;
     let requests = running.then(|| sess.advance_frame());
-
-    world.insert_resource(Session::Spectator(sess));
 
     match requests {
         Some(Ok(requests)) => handle_requests(requests, world),
@@ -132,7 +133,7 @@ pub(crate) fn run_spectator<T: Config>(world: &mut World, mut sess: SpectatorSes
     };
 }
 
-pub(crate) fn run_p2p<C: Config>(world: &mut World, mut sess: P2PSession<C>) {
+pub(crate) fn run_p2p<C: Config>(world: &mut World, sess: &mut P2PSession<C>) {
     world.insert_resource(LocalPlayers(sess.local_player_handles()));
 
     let running = sess.current_state() == SessionState::Running;
@@ -152,8 +153,6 @@ pub(crate) fn run_p2p<C: Config>(world: &mut World, mut sess: P2PSession<C>) {
     }
 
     let requests = running.then(|| sess.advance_frame());
-
-    world.insert_resource(Session::P2P(sess));
 
     match requests {
         Some(Ok(requests)) => handle_requests(requests, world),
