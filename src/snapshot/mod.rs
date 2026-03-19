@@ -9,6 +9,7 @@ use seahash::SeaHasher;
 use std::marker::PhantomData;
 
 mod checksum;
+mod checksum_diagnostics;
 mod childof_snapshot;
 mod component_checksum;
 mod component_map;
@@ -26,6 +27,7 @@ mod set;
 mod strategy;
 
 pub use checksum::*;
+pub use checksum_diagnostics::*;
 pub use childof_snapshot::*;
 pub use component_checksum::*;
 pub use component_map::*;

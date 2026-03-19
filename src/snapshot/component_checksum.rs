@@ -3,8 +3,8 @@ use std::hash::{Hash, Hasher};
 use bevy::prelude::*;
 
 use crate::{
-    ChecksumFlag, ChecksumPart, RollbackId, RollbackOrdered, SaveWorld, SaveWorldSystems,
-    checksum_hasher,
+    ChecksumDiagnostics, ChecksumFlag, ChecksumPart, RollbackId, RollbackOrdered, SaveWorld,
+    SaveWorldSystems, checksum_hasher,
 };
 
 /// A [`Plugin`] which will track the [`Component`] `C` on [`Rollback Entities`](`Rollback`) and ensure a
@@ -66,20 +66,28 @@ where
                            mut checksum: Query<
             &mut ChecksumPart,
             (Without<RollbackId>, With<ChecksumFlag<C>>),
-        >| {
+        >,
+                           diagnostics: Option<Res<ChecksumDiagnostics>>| {
             let mut hasher = checksum_hasher();
 
             let mut result = 0;
+            let type_name = std::any::type_name::<C>();
 
             for (&rollback, component) in components.iter() {
                 let mut hasher = hasher;
 
                 // Hashing the rollback index ensures this hash is unique and stable
-                rollback_ordered.order(rollback).hash(&mut hasher);
+                let order = rollback_ordered.order(rollback);
+                order.hash(&mut hasher);
                 custom_hasher(component).hash(&mut hasher);
 
                 // XOR chosen over addition or multiplication as it is closed on u64 and commutative
-                result ^= hasher.finish();
+                let entity_hash = hasher.finish();
+                result ^= entity_hash;
+
+                if let Some(ref diag) = diagnostics {
+                    diag.record_entity_hash(type_name, order, entity_hash);
+                }
             }
 
             // Hash the XOR'ed result to break commutativity with other types
@@ -92,6 +100,10 @@ where
                 disqualified::ShortName::of::<C>(),
                 result.0
             );
+
+            if let Some(ref diag) = diagnostics {
+                diag.record_type_checksum(type_name, result.0);
+            }
 
             if let Ok(mut checksum) = checksum.single_mut() {
                 *checksum = result;

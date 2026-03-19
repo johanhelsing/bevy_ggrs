@@ -3,8 +3,8 @@ use std::hash::{Hash, Hasher};
 use bevy::prelude::*;
 
 use crate::{
-    ChecksumFlag, ChecksumPart, RollbackId, RollbackOrdered, SaveWorld, SaveWorldSystems,
-    checksum_hasher,
+    ChecksumDiagnostics, ChecksumFlag, ChecksumPart, RollbackId, RollbackOrdered, SaveWorld,
+    SaveWorldSystems, checksum_hasher,
 };
 
 pub struct EntityChecksumPlugin;
@@ -16,6 +16,7 @@ impl EntityChecksumPlugin {
         rollback_ordered: Res<RollbackOrdered>,
         active_entities: Query<&RollbackId, (With<RollbackId>, Without<ChecksumFlag<Entity>>)>,
         mut checksum: Query<&mut ChecksumPart, (Without<RollbackId>, With<ChecksumFlag<Entity>>)>,
+        diagnostics: Option<Res<ChecksumDiagnostics>>,
     ) {
         let mut hasher = checksum_hasher();
 
@@ -28,6 +29,10 @@ impl EntityChecksumPlugin {
         let result = ChecksumPart(hasher.finish() as u128);
 
         trace!("Rollback Entities have checksum {:X}", result.0);
+
+        if let Some(ref diag) = diagnostics {
+            diag.record_type_checksum("Entity", result.0);
+        }
 
         if let Ok(mut checksum) = checksum.single_mut() {
             *checksum = result;
