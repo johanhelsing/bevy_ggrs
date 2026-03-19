@@ -5,7 +5,7 @@ use std::{
 
 use bevy::prelude::*;
 
-use crate::{RollbackFrameCount, SaveWorld, SaveWorldSystems};
+use crate::{ClearSnapshots, RollbackFrameCount, SaveWorld, SaveWorldSystems};
 
 /// Per-frame breakdown of checksum contributions.
 ///
@@ -97,6 +97,13 @@ impl ChecksumDiagnostics {
     /// Whether the history is empty.
     pub fn is_empty(&self) -> bool {
         self.history.is_empty()
+    }
+
+    /// Clear all history. Called when snapshots are reset (e.g. session restart).
+    pub fn clear(&mut self) {
+        self.history.clear();
+        self.frame_order.clear();
+        *self.pending.get_mut().unwrap() = None;
     }
 
     /// Prepare a new frame entry. Called by [`begin_diagnostics_frame`] before
@@ -192,6 +199,11 @@ impl Plugin for ChecksumDiagnosticsPlugin {
                     .after(SaveWorldSystems::Checksum)
                     .before(SaveWorldSystems::Snapshot),
             ),
+        );
+        app.add_observer(
+            |_trigger: On<ClearSnapshots>, mut diagnostics: ResMut<ChecksumDiagnostics>| {
+                diagnostics.clear();
+            },
         );
     }
 }
