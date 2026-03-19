@@ -257,5 +257,27 @@ impl<C: Config> Plugin for GgrsPlugin<C> {
                     .after(InputSystems), // If we are in PreUpdate, run after input is read
             )
             .add_plugins((ChecksumPlugin, EntityChecksumPlugin, GgrsTimePlugin));
+
+        // Auto-reset rollback state when a new session is inserted.
+        // This prevents stale snapshots/frame counts from a previous session
+        // from causing rollback panics in the new session.
+        app.add_systems(
+            self.schedule,
+            reset_rollback_state::<C>
+                .run_if(resource_added::<Session<C>>)
+                .before(RunGgrsSystems),
+        );
     }
+}
+
+/// Reset rollback state when a new [`Session`] is inserted.
+///
+/// Clears all snapshot stores, resets the frame counter, and removes
+/// the stale confirmed frame so that the new session starts fresh.
+fn reset_rollback_state<C: Config>(world: &mut World) {
+    world.resource_mut::<RollbackFrameCount>().0 = 0;
+    world.remove_resource::<ConfirmedFrameCount>();
+    world.trigger(ClearSnapshots);
+    world.insert_resource(Time::new_with(GgrsTime));
+    debug!("Reset rollback state for new session");
 }
