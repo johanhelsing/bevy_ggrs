@@ -7,7 +7,10 @@ use std::hash::{Hash, Hasher};
 
 use bevy::prelude::*;
 
-use crate::{ChecksumFlag, ChecksumPart, RollbackId, SaveWorld, SaveWorldSystems, checksum_hasher};
+use crate::{
+    ChecksumDiagnostics, ChecksumFlag, ChecksumPart, RollbackId, SaveWorld, SaveWorldSystems,
+    checksum_hasher,
+};
 
 /// Plugin which will track the [`Resource`] `R` and ensure a [`ChecksumPart`] is
 /// available and updated. This can be used to generate a [`Checksum`](`crate::Checksum`).
@@ -65,7 +68,8 @@ where
                            mut checksum: Query<
             &mut ChecksumPart,
             (Without<RollbackId>, With<ChecksumFlag<R>>),
-        >| {
+        >,
+                           diagnostics: Option<Res<ChecksumDiagnostics>>| {
             let result = ChecksumPart(custom_hasher(resource.as_ref()) as u128);
 
             trace!(
@@ -73,6 +77,10 @@ where
                 disqualified::ShortName::of::<R>(),
                 result.0
             );
+
+            if let Some(ref diag) = diagnostics {
+                diag.record_type_checksum(std::any::type_name::<R>(), result.0);
+            }
 
             if let Ok(mut checksum) = checksum.single_mut() {
                 *checksum = result;
