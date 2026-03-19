@@ -6,8 +6,8 @@
 //! marked `#[component(immutable)]`, which must be re-inserted rather than mutated in place.
 
 use crate::{
-    GgrsComponentSnapshot, GgrsComponentSnapshots, LoadWorld, LoadWorldSystems, RollbackFrameCount,
-    RollbackId, SaveWorld, SaveWorldSystems, Strategy,
+    ClearSnapshots, GgrsComponentSnapshot, GgrsComponentSnapshots, LoadWorld, LoadWorldSystems,
+    RollbackFrameCount, RollbackId, SaveWorld, SaveWorldSystems, Strategy,
 };
 use bevy::{
     ecs::component::{Immutable, Mutable},
@@ -143,6 +143,12 @@ where
                     .in_set(SaveWorldSystems::Snapshot),
             );
         app.add_systems(LoadWorld, Self::load.in_set(LoadWorldSystems::Data));
+        app.add_observer(
+            |_trigger: On<ClearSnapshots>,
+             mut snapshots: ResMut<GgrsComponentSnapshots<S::Target, S::Stored>>| {
+                snapshots.clear();
+            },
+        );
     }
 }
 
@@ -204,6 +210,12 @@ where
                     .in_set(SaveWorldSystems::Snapshot),
             )
             .add_systems(LoadWorld, Self::load.in_set(LoadWorldSystems::Data));
+        app.add_observer(
+            |_trigger: On<ClearSnapshots>,
+             mut snapshots: ResMut<GgrsComponentSnapshots<S::Target, S::Stored>>| {
+                snapshots.clear();
+            },
+        );
     }
 }
 
