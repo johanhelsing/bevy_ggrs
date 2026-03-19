@@ -72,7 +72,7 @@ impl From<RollbackFrameCount> for i32 {
 
 /// The most recently confirmed frame. Any information for frames stored before this point can be safely discarded.
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ConfirmedFrameCount(pub(crate) i32);
+pub struct ConfirmedFrameCount(pub i32);
 
 impl From<ConfirmedFrameCount> for i32 {
     fn from(value: ConfirmedFrameCount) -> i32 {
@@ -112,6 +112,12 @@ impl<For, As> Default for GgrsSnapshots<For, As> {
 }
 
 impl<For, As> GgrsSnapshots<For, As> {
+    /// Remove all stored snapshots.
+    pub fn clear(&mut self) {
+        self.snapshots.clear();
+        self.current_frame = None;
+    }
+
     /// Store a snapshot for the provided frame, replacing any existing snapshot.
     pub fn push(&mut self, frame: i32, snapshot: As) -> &mut Self {
         self.snapshots.insert(frame, snapshot);
@@ -231,6 +237,24 @@ impl<For, As> GgrsComponentSnapshot<For, As> {
 pub fn checksum_hasher() -> SeaHasher {
     SeaHasher::new()
 }
+
+/// Trigger this event to clear all snapshot stores.
+///
+/// Each snapshot plugin registers an observer that clears its own store
+/// when this event fires. Use this when starting a new session to flush
+/// stale snapshots from a previous session that used different frame
+/// numbering.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// # use bevy::prelude::*;
+/// fn reset_session(world: &mut World) {
+///     world.trigger(bevy_ggrs::ClearSnapshots);
+/// }
+/// ```
+#[derive(Event)]
+pub struct ClearSnapshots;
 
 /// Global snapshot depth limit. `None` means unbounded.
 ///

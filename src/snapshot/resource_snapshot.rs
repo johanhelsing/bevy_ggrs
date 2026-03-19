@@ -1,6 +1,6 @@
 use crate::{
-    GgrsResourceSnapshots, LoadWorld, LoadWorldSystems, RollbackFrameCount, SaveWorld,
-    SaveWorldSystems, Strategy,
+    ClearSnapshots, GgrsResourceSnapshots, LoadWorld, LoadWorldSystems, RollbackFrameCount,
+    SaveWorld, SaveWorldSystems, Strategy,
 };
 use bevy::prelude::*;
 use std::marker::PhantomData;
@@ -102,5 +102,11 @@ where
                     .in_set(SaveWorldSystems::Snapshot),
             )
             .add_systems(LoadWorld, Self::load.in_set(LoadWorldSystems::Data));
+        app.add_observer(
+            |_trigger: On<ClearSnapshots>,
+             mut snapshots: ResMut<GgrsResourceSnapshots<S::Target, S::Stored>>| {
+                snapshots.clear();
+            },
+        );
     }
 }
