@@ -20,8 +20,13 @@ pub struct Rollback;
 
 /// A stable identifier for rollback entities, used as a key in snapshot storage.
 /// Automatically inserted when [`Rollback`] is added to an entity.
+///
+/// `clone_behavior = Ignore` prevents `EntityCloner` from copying this value
+/// onto a clone — `RollbackId` is an identity, not a value to share. A clone
+/// instead receives a fresh `RollbackId` from the `Rollback` (or marker)
+/// observer's `on_add` hook firing on the new entity.
 #[derive(Component, Hash, PartialEq, Eq, Clone, Copy, Debug)]
-#[component(immutable)]
+#[component(immutable, clone_behavior = Ignore)]
 pub struct RollbackId(Entity);
 
 impl RollbackId {
