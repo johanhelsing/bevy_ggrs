@@ -9,7 +9,7 @@
 //! [`GgrsPlugin`](`crate::GgrsPlugin`), but the types here are public so that
 //! advanced users can build custom snapshot behaviour.
 
-use crate::{DEFAULT_FPS, MaxPredictionWindow};
+use crate::DEFAULT_FPS;
 use bevy::{
     ecs::reflect::AppTypeRegistry,
     ecs::schedule::ScheduleLabel,
@@ -204,21 +204,6 @@ impl<For, As> GgrsSnapshots<For, As> {
             snapshots.confirm(confirmed_frame.0, &pinned);
         }
     }
-
-    /// A system which syncs the snapshot depth to [`MaxPredictionWindow`].
-    /// Runs before each save to ensure snapshots are never evicted prematurely
-    /// when the prediction window exceeds the default depth.
-    pub fn sync_depth(mut snapshots: ResMut<Self>, max_prediction: Option<Res<MaxPredictionWindow>>)
-    where
-        For: Send + Sync + 'static,
-        As: Send + Sync + 'static,
-    {
-        let Some(max_prediction) = max_prediction else {
-            return;
-        };
-
-        snapshots.set_depth(max_prediction.0);
-    }
 }
 
 /// A storage type suitable for per-[`Entity`] snapshots, such as [`Component`] types.
@@ -377,21 +362,25 @@ pub(crate) mod tests {
 
     type Snap = GgrsSnapshots<u32, u32>;
 
-    fn snap_with_depth(depth: usize) -> Snap {
-        let mut s = Snap::default();
-        s.set_depth(depth);
-        s
+    fn snap() -> Snap {
+        Snap::default()
+    }
+
+    /// Empty pinned-frame set for `evict`/`confirm` in tests.
+    fn no_pins() -> bevy::platform::collections::HashSet<i32> {
+        bevy::platform::collections::HashSet::default()
     }
 
     // --- push ---
 
-    /// When depth is exceeded, the oldest frames are evicted.
+    /// When depth is exceeded, `evict` removes the oldest unpinned frames.
     #[test]
-    fn push_evicts_oldest_when_depth_exceeded() {
-        let mut s = snap_with_depth(3);
+    fn evict_removes_oldest_when_depth_exceeded() {
+        let mut s = snap();
         for i in 0..5_i32 {
             s.push(i, i as u32);
         }
+        s.evict(3, &no_pins());
         // Only frames 2, 3, 4 should survive
         assert!(s.peek(0).is_none());
         assert!(s.peek(1).is_none());
@@ -403,7 +392,7 @@ pub(crate) mod tests {
     /// Pushing the same frame twice replaces the old snapshot.
     #[test]
     fn push_same_frame_replaces() {
-        let mut s = snap_with_depth(8);
+        let mut s = snap();
         s.push(3, 10);
         s.push(3, 20);
         assert_eq!(s.peek(3), Some(&20));
@@ -414,11 +403,11 @@ pub(crate) mod tests {
     /// Confirming a frame prunes all snapshots strictly before it.
     #[test]
     fn confirm_prunes_older_frames() {
-        let mut s = snap_with_depth(8);
+        let mut s = snap();
         for i in 0..6_i32 {
             s.push(i, i as u32);
         }
-        s.confirm(3);
+        s.confirm(3, &no_pins());
         assert!(s.peek(0).is_none());
         assert!(s.peek(1).is_none());
         assert!(s.peek(2).is_none());
@@ -431,11 +420,11 @@ pub(crate) mod tests {
     /// Confirming beyond all stored frames leaves the storage empty.
     #[test]
     fn confirm_beyond_all_frames_empties_storage() {
-        let mut s = snap_with_depth(8);
+        let mut s = snap();
         for i in 0..4_i32 {
             s.push(i, i as u32);
         }
-        s.confirm(100);
+        s.confirm(100, &no_pins());
         for i in 0..4_i32 {
             assert!(s.peek(i).is_none());
         }
@@ -444,8 +433,8 @@ pub(crate) mod tests {
     /// Confirming on an empty storage does not panic.
     #[test]
     fn confirm_on_empty_does_not_panic() {
-        let mut s: Snap = snap_with_depth(8);
-        s.confirm(5); // should not panic
+        let mut s: Snap = snap();
+        s.confirm(5, &no_pins()); // should not panic
     }
 
     // --- rollback ---
@@ -453,7 +442,7 @@ pub(crate) mod tests {
     /// Rollback to an existing frame succeeds and positions the cursor there.
     #[test]
     fn rollback_to_existing_frame() {
-        let mut s = snap_with_depth(8);
+        let mut s = snap();
         for i in 0..5_i32 {
             s.push(i, i as u32 * 10);
         }
@@ -465,7 +454,7 @@ pub(crate) mod tests {
     #[test]
     #[should_panic(expected = "Could not rollback to 99")]
     fn rollback_missing_frame_panics() {
-        let mut s = snap_with_depth(8);
+        let mut s = snap();
         s.push(0, 0);
         s.rollback(99);
     }
@@ -477,7 +466,7 @@ pub(crate) mod tests {
     /// is prepended as the newest snapshot.
     #[test]
     fn push_wraps_i32_max_to_min_retains_history() {
-        let mut s = snap_with_depth(8);
+        let mut s = snap();
         s.push(i32::MAX - 2, 1);
         s.push(i32::MAX - 1, 2);
         s.push(i32::MAX, 3);
