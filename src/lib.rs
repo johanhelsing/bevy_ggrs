@@ -262,28 +262,50 @@ impl<C: Config> Plugin for GgrsPlugin<C> {
         // This prevents stale snapshots/frame counts from a previous session
         // from causing rollback panics in the new session.
         //
-        // This works because `resource_scope` in `run_ggrs_schedules` preserves
-        // change detection ticks when re-inserting Session each frame, so
-        // `resource_added` only fires once when the consumer genuinely inserts
-        // a new Session.
+        // We detect a genuinely new session via the absent -> present transition
+        // of `Session<C>`, tracked by the private `SessionActive<C>` marker.
+        // We deliberately do NOT use `resource_added::<Session<C>>`: on Bevy 0.19
+        // `resource_scope` (used every frame by `run_ggrs_schedules`) re-inserts
+        // `Session` with a fresh "added" tick, so `resource_added` would fire on
+        // every frame and clear snapshots continuously.
         app.add_systems(
             self.schedule,
-            reset_rollback_state::<C>
-                .run_if(resource_added::<Session<C>>)
-                .before(RunGgrsSystems),
+            reset_rollback_state::<C>.before(RunGgrsSystems),
         );
     }
 }
 
-/// Resets rollback state when a new [`Session`] is inserted.
+/// Private marker tracking that the rollback state has been initialized for the
+/// currently-present [`Session<C>`]. Present while a session is active; removed
+/// once the session is gone, so the next session triggers a fresh reset.
+#[derive(Resource)]
+struct SessionActive<C: Config>(PhantomData<fn() -> C>);
+
+/// Resets rollback state on the absent -> present transition of [`Session<C>`].
 ///
 /// Clears all snapshot stores, resets the frame counter, and removes the
-/// stale confirmed frame count so that the new session starts clean.
+/// stale confirmed frame count so that the new session starts clean. Runs every
+/// frame but only does work when a session has just started (or just ended).
 fn reset_rollback_state<C: Config>(world: &mut World) {
-    let old_frame = world.resource::<RollbackFrameCount>().0;
-    world.resource_mut::<RollbackFrameCount>().0 = 0;
-    world.remove_resource::<ConfirmedFrameCount>();
-    world.trigger(ClearSnapshots);
-    world.insert_resource(Time::new_with(GgrsTime));
-    info!("Reset rollback state for new session (was at frame {old_frame})");
+    let has_session = world.contains_resource::<Session<C>>();
+    let initialized = world.contains_resource::<SessionActive<C>>();
+
+    match (has_session, initialized) {
+        // Session ended: forget it so the next one resets.
+        (false, true) => {
+            world.remove_resource::<SessionActive<C>>();
+        }
+        // New session just inserted: reset rollback state.
+        (true, false) => {
+            world.insert_resource(SessionActive::<C>(PhantomData));
+            let old_frame = world.resource::<RollbackFrameCount>().0;
+            world.resource_mut::<RollbackFrameCount>().0 = 0;
+            world.remove_resource::<ConfirmedFrameCount>();
+            world.trigger(ClearSnapshots);
+            world.insert_resource(Time::new_with(GgrsTime));
+            info!("Reset rollback state for new session (was at frame {old_frame})");
+        }
+        // Steady state (running session, or no session): nothing to do.
+        _ => {}
+    }
 }

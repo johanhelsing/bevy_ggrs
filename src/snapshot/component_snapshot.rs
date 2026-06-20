@@ -135,7 +135,6 @@ where
             .add_systems(
                 SaveWorld,
                 (
-                    GgrsComponentSnapshots::<S::Target, S::Stored>::sync_depth,
                     GgrsComponentSnapshots::<S::Target, S::Stored>::discard_old_snapshots,
                     Self::save,
                 )
@@ -202,7 +201,6 @@ where
             .add_systems(
                 SaveWorld,
                 (
-                    GgrsComponentSnapshots::<S::Target, S::Stored>::sync_depth,
                     GgrsComponentSnapshots::<S::Target, S::Stored>::discard_old_snapshots,
                     ComponentSnapshotPlugin::<S>::save,
                 )

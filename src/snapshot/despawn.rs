@@ -91,18 +91,22 @@ fn despawn_confirmed_entities(
     despawn_query: &mut QueryState<(Entity, &RollbackDespawned)>,
     mut local: Local<ConfirmedFrameCount>,
 ) {
-    let confirmed_frame = world.resource::<ConfirmedFrameCount>();
-    if *confirmed_frame == *local {
+    // `ConfirmedFrameCount` is absent between a session reset (which removes it) and the
+    // first confirmed frame of the new session. Nothing to despawn in that window.
+    let Some(confirmed_frame) = world.get_resource::<ConfirmedFrameCount>().copied() else {
+        return;
+    };
+    if confirmed_frame == *local {
         return; // No work necessary
     }
-    *local = *confirmed_frame;
+    *local = confirmed_frame;
 
     despawn_query
         .iter(world)
         .filter_map(|(entity, despawned_frame)| {
             // Entities marked as despawned on the confirmed frame or earlier can be immediately
             // despawned.
-            Some(entity).filter(|_e| despawned_frame <= confirmed_frame)
+            Some(entity).filter(|_e| despawned_frame <= &confirmed_frame)
         })
         .collect::<Vec<_>>()
         .into_iter()

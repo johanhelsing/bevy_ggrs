@@ -110,7 +110,6 @@ where
             .add_systems(
                 SaveWorld,
                 (
-                    GgrsResourceSnapshots::<S::Target, S::Stored>::sync_depth,
                     GgrsResourceSnapshots::<S::Target, S::Stored>::discard_old_snapshots,
                     Self::save,
                 )
