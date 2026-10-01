@@ -99,9 +99,13 @@ pub(crate) fn run_synctest<C: Config>(world: &mut World, sess: &mut SyncTestSess
     }
 
     let requests = sess.advance_frame();
+    let frames = SessionFrames {
+        max_prediction: sess.max_prediction(),
+        confirmed: Confirmed::Behind(sess.check_distance()),
+    };
 
     match requests {
-        Ok(requests) => handle_requests(requests, world),
+        Ok(requests) => handle_requests(requests, frames, world),
         Err(e) => {
             warn!("{e}");
             if let GgrsError::MismatchedChecksum {
@@ -122,9 +126,13 @@ pub(crate) fn run_spectator<T: Config>(world: &mut World, sess: &mut SpectatorSe
     // if session is ready, try to advance the frame
     let running = sess.current_state() == SessionState::Running;
     let requests = running.then(|| sess.advance_frame());
+    let frames = SessionFrames {
+        max_prediction: 0,
+        confirmed: Confirmed::Current,
+    };
 
     match requests {
-        Some(Ok(requests)) => handle_requests(requests, world),
+        Some(Ok(requests)) => handle_requests(requests, frames, world),
         Some(Err(GgrsError::PredictionThreshold)) => {
             info!("P2PSpectatorSession: Waiting for input from host.")
         }
@@ -153,9 +161,13 @@ pub(crate) fn run_p2p<C: Config>(world: &mut World, sess: &mut P2PSession<C>) {
     }
 
     let requests = running.then(|| sess.advance_frame());
+    let frames = SessionFrames {
+        max_prediction: sess.max_prediction(),
+        confirmed: Confirmed::Frame(sess.confirmed_frame()),
+    };
 
     match requests {
-        Some(Ok(requests)) => handle_requests(requests, world),
+        Some(Ok(requests)) => handle_requests(requests, frames, world),
         Some(Err(GgrsError::PredictionThreshold)) => {
             info!("Skipping a frame: PredictionThreshold.")
         }
@@ -164,7 +176,35 @@ pub(crate) fn run_p2p<C: Config>(world: &mut World, sess: &mut P2PSession<C>) {
     }
 }
 
-pub(crate) fn handle_requests<T: Config>(requests: Vec<GgrsRequest<T>>, world: &mut World) {
+/// What [`handle_requests`] needs to know about the session it runs requests
+/// for.
+///
+/// Read by the caller, which holds the session: while the requests run, the
+/// [`Session`] resource is out of the world (`run_ggrs_schedules` lends it out
+/// through `resource_scope`), so `handle_requests` cannot look it up itself.
+pub(crate) struct SessionFrames {
+    max_prediction: usize,
+    confirmed: Confirmed,
+}
+
+/// How the confirmed frame follows the session.
+enum Confirmed {
+    /// Fixed for the whole batch. A P2P session only learns of new remote
+    /// input when polled, and nothing polls it between `advance_frame` and
+    /// the end of the batch, so the batch resimulates every mispredicted
+    /// frame up to this one.
+    Frame(i32),
+    /// This many frames behind the frame being requested (synctest).
+    Behind(usize),
+    /// The frame being requested (spectator).
+    Current,
+}
+
+pub(crate) fn handle_requests<T: Config>(
+    requests: Vec<GgrsRequest<T>>,
+    frames: SessionFrames,
+    world: &mut World,
+) {
     let _span = bevy::log::tracing::info_span!("ggrs", name = "HandleRequests").entered();
 
     // perf: Extracting schedules before processing requests to avoid repeated remove/insert operations
@@ -189,29 +229,16 @@ pub(crate) fn handle_requests<T: Config>(requests: Vec<GgrsRequest<T>>, world: &
             .map(|frame| frame.0)
             .unwrap_or_default();
 
-        let session = world.get_resource::<Session<T>>();
+        world.insert_resource(MaxPredictionWindow(frames.max_prediction));
 
-        let max_prediction = match session {
-            Some(Session::P2P(s)) => Some(s.max_prediction()),
-            Some(Session::SyncTest(s)) => Some(s.max_prediction()),
-            Some(Session::Spectator(_)) => Some(0),
-            None => None,
-        };
-
-        let confirmed_frame = match session {
-            Some(Session::P2P(s)) => Some(s.confirmed_frame()),
-            Some(Session::SyncTest(s)) => {
-                let current_frame = current_frame - (s.check_distance() as i32);
-                (current_frame >= 0).then_some(current_frame)
+        let confirmed_frame = match frames.confirmed {
+            Confirmed::Frame(frame) => Some(frame),
+            Confirmed::Behind(check_distance) => {
+                let confirmed = current_frame - check_distance as i32;
+                (confirmed >= 0).then_some(confirmed)
             }
-            Some(Session::Spectator(_)) => Some(current_frame),
-            None => None,
+            Confirmed::Current => Some(current_frame),
         };
-
-        if let Some(max_prediction) = max_prediction {
-            world.insert_resource(MaxPredictionWindow(max_prediction));
-        }
-
         if let Some(confirmed_frame) = confirmed_frame {
             world.insert_resource(ConfirmedFrameCount(confirmed_frame));
         }
