@@ -17,7 +17,7 @@ use bevy::{
     prelude::*,
 };
 use seahash::SeaHasher;
-use std::marker::PhantomData;
+use std::{collections::BTreeSet, marker::PhantomData};
 
 mod checksum;
 mod checksum_diagnostics;
@@ -142,14 +142,7 @@ impl<For, As> GgrsSnapshots<For, As> {
     ///
     /// Pinned frames are never evicted regardless of the depth limit.
     pub fn evict(&mut self, depth: usize, pinned: &HashSet<i32>) {
-        let is_unpinned = |f: &&i32| !pinned.contains(*f);
-        while self.snapshots.keys().filter(is_unpinned).count() > depth {
-            if let Some(&oldest) = self.snapshots.keys().filter(is_unpinned).min() {
-                self.snapshots.remove(&oldest);
-            } else {
-                break;
-            }
-        }
+        self.discard(Some(depth), pinned, None);
     }
 
     /// Discards unpinned snapshots from before `confirmed_frame` as no longer required.
@@ -157,6 +150,15 @@ impl<For, As> GgrsSnapshots<For, As> {
         self.snapshots
             .retain(|&frame, _| frame >= confirmed_frame || pinned.contains(&frame));
         self
+    }
+
+    /// [`evict`](Self::evict) and [`confirm`](Self::confirm) in one pass over the stored frames.
+    fn discard(&mut self, depth: Option<usize>, pinned: &HashSet<i32>, confirmed: Option<i32>) {
+        let mut frames: Vec<i32> = self.snapshots.keys().copied().collect();
+        frames.sort_unstable();
+        for frame in frames_to_discard(&mut frames.into_iter().rev(), depth, pinned, confirmed) {
+            self.snapshots.remove(&frame);
+        }
     }
 
     /// Selects a frame to rollback to. Use `get()` to retrieve the snapshot.
@@ -187,8 +189,12 @@ impl<For, As> GgrsSnapshots<For, As> {
     /// A system which evicts old snapshots based on [`SnapshotDepth`] and
     /// confirms the [`ConfirmedFrameCount`]. Pinned frames (via [`PinnedFrames`])
     /// are never evicted or confirmed away.
+    ///
+    /// Which frames go is decided once per [`SaveWorld`] for every store, by
+    /// [`plan_snapshot_discards`]; this only removes the frames it names.
     pub fn discard_old_snapshots(
         mut snapshots: ResMut<Self>,
+        frames: Res<SnapshotFrames>,
         depth: Res<SnapshotDepth>,
         pinned: Res<PinnedFrames>,
         confirmed_frame: Option<Res<ConfirmedFrameCount>>,
@@ -196,14 +202,94 @@ impl<For, As> GgrsSnapshots<For, As> {
         For: Send + Sync + 'static,
         As: Send + Sync + 'static,
     {
-        if let Some(max) = depth.0 {
-            snapshots.evict(max, &pinned);
+        for frame in &frames.discard {
+            snapshots.snapshots.remove(frame);
         }
 
-        if let Some(confirmed_frame) = confirmed_frame {
-            snapshots.confirm(confirmed_frame.0, &pinned);
+        // Every frame a store holds was saved in `SaveWorld`, so the plan has
+        // seen it. A store holding more frames than the plan was filled some
+        // other way, and decides for itself rather than grow without bound.
+        if snapshots.snapshots.len() > frames.saved.len() {
+            snapshots.discard(depth.0, &pinned, confirmed_frame.map(|c| c.0));
         }
     }
+}
+
+/// The frames to discard, given every stored frame newest first: all but the
+/// newest `depth` unpinned frames (none when `depth` is `None`), and every
+/// unpinned frame before `confirmed`.
+///
+/// Not generic, so it is compiled once, in this crate, however many snapshot
+/// types there are.
+fn frames_to_discard(
+    newest_first: &mut dyn Iterator<Item = i32>,
+    depth: Option<usize>,
+    pinned: &HashSet<i32>,
+    confirmed: Option<i32>,
+) -> Vec<i32> {
+    let mut unpinned = 0;
+    let mut discard = Vec::new();
+    for frame in newest_first {
+        if pinned.contains(&frame) {
+            continue;
+        }
+        unpinned += 1;
+        let beyond_depth = depth.is_some_and(|depth| unpinned > depth);
+        let confirmed_away = confirmed.is_some_and(|confirmed| frame < confirmed);
+        if beyond_depth || confirmed_away {
+            discard.push(frame);
+        }
+    }
+    discard
+}
+
+/// The frames the snapshot stores hold, and the ones this [`SaveWorld`] discards.
+///
+/// Every store saves the same frames and discards by the same rule
+/// ([`SnapshotDepth`], [`PinnedFrames`], [`ConfirmedFrameCount`]), so the
+/// rule runs once per save here, in [`plan_snapshot_discards`], and each
+/// store's [`discard_old_snapshots`](GgrsSnapshots::discard_old_snapshots)
+/// removes what it names. Run per store, the rule was a scan of every stored
+/// frame, with a [`PinnedFrames`] lookup each, per snapshot type per frame.
+#[derive(Resource, Default, Debug)]
+pub struct SnapshotFrames {
+    saved: BTreeSet<i32>,
+    discard: Vec<i32>,
+}
+
+impl SnapshotFrames {
+    /// The frames the stores hold, oldest first, before this save's discard.
+    pub fn saved(&self) -> impl Iterator<Item = i32> + '_ {
+        self.saved.iter().copied()
+    }
+
+    /// The frames this save discards from every store.
+    pub fn discarded(&self) -> &[i32] {
+        &self.discard
+    }
+}
+
+/// Decides which frames every snapshot store discards this [`SaveWorld`], and
+/// records the frame about to be saved. Runs before
+/// [`SaveWorldSystems::Snapshot`].
+pub fn plan_snapshot_discards(
+    mut frames: ResMut<SnapshotFrames>,
+    frame: Res<RollbackFrameCount>,
+    depth: Res<SnapshotDepth>,
+    pinned: Res<PinnedFrames>,
+    confirmed_frame: Option<Res<ConfirmedFrameCount>>,
+) {
+    let frames = &mut *frames;
+    frames.discard = frames_to_discard(
+        &mut frames.saved.iter().rev().copied(),
+        depth.0,
+        &pinned,
+        confirmed_frame.map(|c| c.0),
+    );
+    for discarded in &frames.discard {
+        frames.saved.remove(discarded);
+    }
+    frames.saved.insert(frame.0);
 }
 
 /// A storage type suitable for per-[`Entity`] snapshots, such as [`Component`] types.
@@ -315,6 +401,18 @@ impl Plugin for SnapshotPlugin {
         app.init_resource::<SnapshotDepth>();
         app.init_resource::<PinnedFrames>();
         app.register_type::<PinnedFrames>();
+        app.init_resource::<SnapshotFrames>()
+            .add_systems(
+                SaveWorld,
+                plan_snapshot_discards
+                    .after(SaveWorldSystems::Checksum)
+                    .before(SaveWorldSystems::Snapshot),
+            )
+            .add_observer(
+                |_: On<ClearSnapshots>, mut frames: ResMut<SnapshotFrames>| {
+                    *frames = SnapshotFrames::default();
+                },
+            );
         app.add_plugins(SnapshotSetPlugin)
             .init_resource::<RollbackOrdered>()
             .init_resource::<RollbackFrameCount>()
@@ -477,6 +575,97 @@ pub(crate) mod tests {
         assert_eq!(s.peek(i32::MAX - 1), Some(&2));
         assert_eq!(s.peek(i32::MAX), Some(&3));
         assert_eq!(s.peek(i32::MIN), Some(&4));
+    }
+
+    // --- the per-save discard plan ---
+
+    /// The frames a store holds, oldest first.
+    fn stored<For, As>(s: &GgrsSnapshots<For, As>) -> Vec<i32> {
+        let mut frames: Vec<i32> = s.snapshots.keys().copied().collect();
+        frames.sort_unstable();
+        frames
+    }
+
+    /// Every store keeps what it kept when each store ran the rule on its own:
+    /// the newest `depth` unpinned frames before the one it saves, every
+    /// pinned frame, and nothing unpinned before the confirmed frame.
+    #[test]
+    fn every_store_discards_by_the_plan() {
+        use super::{
+            ConfirmedFrameCount, GgrsComponentSnapshots, GgrsResourceSnapshots, PinnedFrames,
+            RollbackOrdered, SnapshotDepth, SnapshotPlugin,
+        };
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(SnapshotDepth(Some(3)));
+        app.add_plugins(SnapshotPlugin);
+        app.update();
+        let pinned = [1, 5];
+        app.world_mut()
+            .resource_mut::<PinnedFrames>()
+            .extend(pinned);
+
+        // The rule as each store ran it before the plan, step by step.
+        let mut expected: Vec<i32> = Vec::new();
+        for frame in 0..20 {
+            let confirmed = (frame >= 12).then_some(10);
+            if let Some(confirmed) = confirmed {
+                app.world_mut()
+                    .insert_resource(ConfirmedFrameCount(confirmed));
+            }
+            save_world(app.world_mut());
+
+            let unpinned = |e: &Vec<i32>| e.iter().filter(|f| !pinned.contains(f)).count();
+            while unpinned(&expected) > 3 {
+                let oldest = expected.iter().position(|f| !pinned.contains(f)).unwrap();
+                expected.remove(oldest);
+            }
+            if let Some(confirmed) = confirmed {
+                expected.retain(|f| *f >= confirmed || pinned.contains(f));
+            }
+            expected.push(frame);
+
+            let world = app.world();
+            assert_eq!(
+                stored(world.resource::<GgrsComponentSnapshots<Entity>>()),
+                expected,
+                "entity store after saving frame {frame}"
+            );
+            assert_eq!(
+                stored(world.resource::<GgrsResourceSnapshots<RollbackOrdered>>()),
+                expected,
+                "resource store after saving frame {frame}"
+            );
+            advance_frame(app.world_mut());
+        }
+    }
+
+    /// A store filled outside `SaveWorld` holds frames the plan never saw,
+    /// and discards them by the same rule rather than keep them forever.
+    #[test]
+    fn a_store_the_plan_has_not_seen_discards_for_itself() {
+        use super::{GgrsComponentSnapshots, SnapshotDepth, SnapshotPlugin};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(SnapshotDepth(Some(3)));
+        app.add_plugins(SnapshotPlugin);
+        app.update();
+        {
+            let mut store = app
+                .world_mut()
+                .resource_mut::<GgrsComponentSnapshots<Entity>>();
+            for frame in 0..10 {
+                store.push(frame, default());
+            }
+        }
+        app.world_mut().resource_mut::<RollbackFrameCount>().0 = 10;
+        save_world(app.world_mut());
+        assert_eq!(
+            stored(app.world().resource::<GgrsComponentSnapshots<Entity>>()),
+            vec![7, 8, 9, 10]
+        );
     }
 
     /// Saves the world by running the [`SaveWorld`] schedule.
