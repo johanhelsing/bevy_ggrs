@@ -19,7 +19,7 @@ use super::{GgrsComponentSnapshot, RollbackEntityMap, RollbackId};
 /// 2. The stored parent [`Entity`] must be remapped through [`RollbackEntityMap`] at restore time.
 ///
 /// Unlike components that go through [`LoadWorldSystems::Mapping`], the remapping is performed
-/// inline during [`LoadWorldSystems::Data`] so that the hierarchy is coherent by the time
+/// inline during [`LoadWorldSystems::ComponentData`] so that the hierarchy is coherent by the time
 /// the mapping stage runs.
 pub struct ChildOfSnapshotPlugin;
 
@@ -36,7 +36,10 @@ impl Plugin for ChildOfSnapshotPlugin {
                     .chain()
                     .in_set(SaveWorldSystems::Snapshot),
             )
-            .add_systems(LoadWorld, Self::load.in_set(LoadWorldSystems::Data));
+            .add_systems(
+                LoadWorld,
+                Self::load.in_set(LoadWorldSystems::ComponentData),
+            );
         app.add_observer(
             |_trigger: On<ClearSnapshots>,
              mut snapshots: ResMut<GgrsComponentSnapshots<ChildOf, ChildOf>>| {

@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use crate::snapshot::{AdvanceWorld, LoadWorld, SaveWorld};
 
 /// Set for ordering systems during the [`LoadWorld`] schedule.
-/// The most common option is [`LoadWorldSystems::Data`], which is where [`Component`]
+/// The most common option is [`LoadWorldSystems::ComponentData`], which is where [`Component`]
 /// snapshots are loaded and applied to the [`World`]. [`Resource`] snapshots follow in
 /// [`LoadWorldSystems::ResourceData`].
 #[derive(SystemSet, Hash, Debug, PartialEq, Eq, Clone)]
@@ -26,20 +26,20 @@ pub enum LoadWorldSystems {
     /// Flush any deferred operations
     EntityFlush,
     /// Recreate the stored [`Components`](`Component`) as they were during the frame to be
-    /// rolled back to. Once [`LoadWorldSystems::DataFlush`] is complete, they are in their
+    /// rolled back to. Once [`LoadWorldSystems::ComponentDataFlush`] is complete, they are in their
     /// exact state during the snapshot.
     ///
     /// NOTE: At this point, [`Entity`] relationships may be broken, see [`LoadWorldSystems::Mapping`]
     /// for when those relationships are fixed.
-    Data,
+    ComponentData,
     /// Flush any deferred operations. Components inserted on a respawned entity land here,
     /// and their hooks and observers run.
-    DataFlush,
+    ComponentDataFlush,
     /// Recreate the stored [`Resources`](`Resource`) as they were during the frame to be
     /// rolled back to. When this set is complete, all [`Resources`](`Resource`) are in their
     /// exact state during the snapshot.
     ///
-    /// Runs after [`LoadWorldSystems::DataFlush`] so that anything the component hooks
+    /// Runs after [`LoadWorldSystems::ComponentDataFlush`] so that anything the component hooks
     /// wrote to a rolled-back resource there is overwritten: a `#[require]`d default
     /// inserted ahead of its snapshot value can take an id from a counter, for example.
     ResourceData,
@@ -107,8 +107,8 @@ impl Plugin for SnapshotSetPlugin {
                 LoadWorldSystems::EntityResurrect,
                 LoadWorldSystems::Entity,
                 LoadWorldSystems::EntityFlush,
-                LoadWorldSystems::Data,
-                LoadWorldSystems::DataFlush,
+                LoadWorldSystems::ComponentData,
+                LoadWorldSystems::ComponentDataFlush,
                 LoadWorldSystems::ResourceData,
                 LoadWorldSystems::ResourceDataFlush,
                 LoadWorldSystems::Mapping,
@@ -133,7 +133,10 @@ impl Plugin for SnapshotSetPlugin {
             LoadWorld,
             ApplyDeferred.in_set(LoadWorldSystems::EntityFlush),
         )
-        .add_systems(LoadWorld, ApplyDeferred.in_set(LoadWorldSystems::DataFlush))
+        .add_systems(
+            LoadWorld,
+            ApplyDeferred.in_set(LoadWorldSystems::ComponentDataFlush),
+        )
         .add_systems(
             LoadWorld,
             ApplyDeferred.in_set(LoadWorldSystems::ResourceDataFlush),
