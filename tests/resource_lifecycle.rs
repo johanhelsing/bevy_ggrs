@@ -173,3 +173,63 @@ fn resource_map_entities_remaps_after_rollback() {
         "Target entity reference should still be valid after all rollbacks"
     );
 }
+
+/// Verifies that a resource a component hook writes while a rollback respawns an entity
+/// ends up at its snapshot value.
+///
+/// `Ticket`'s insert hook takes a number from the rolled-back `Issued` counter, the way
+/// an id allocator does. The entity is despawned at frame 3, so with `check_distance = 4`
+/// every rollback across that frame respawns it, and the restore inserts `Ticket` again.
+/// Resources are restored after that insert, so the hook's increment is overwritten; were
+/// they restored first, `Issued` would gain one per respawn and `SyncTestMismatch` fires.
+#[test]
+fn resource_written_by_a_hook_during_respawn_rolls_back() {
+    use bevy::ecs::lifecycle::HookContext;
+    use bevy::ecs::world::DeferredWorld;
+
+    #[derive(Component, Copy, Clone, Hash)]
+    #[component(on_insert = take_ticket)]
+    struct Ticket;
+
+    #[derive(Resource, Copy, Clone, Hash, Default)]
+    struct Issued(u32);
+
+    fn take_ticket(mut world: DeferredWorld, _: HookContext) {
+        world.resource_mut::<Issued>().0 += 1;
+    }
+
+    fn despawn_at_frame_3(
+        mut commands: Commands,
+        frame: Res<RollbackFrameCount>,
+        tickets: Query<Entity, With<Ticket>>,
+    ) {
+        if frame.0 == 3 {
+            for entity in &tickets {
+                commands.entity(entity).despawn();
+            }
+        }
+    }
+
+    let mut app = base_synctest_app(4);
+    app.init_resource::<Issued>()
+        .rollback_component_with_copy::<Ticket>()
+        .rollback_resource_with_copy::<Issued>()
+        .checksum_resource_with_hash::<Issued>()
+        .add_systems(GgrsSchedule, despawn_at_frame_3);
+    app.world_mut().spawn((Ticket, Rollback));
+
+    app.world_mut().add_observer(|_: On<SyncTestMismatch>| {
+        panic!("SyncTestMismatch: a hook's write to Issued survived the rollback");
+    });
+
+    for _ in 0..20 {
+        app.update();
+    }
+
+    assert!(app.world().resource::<RollbackFrameCount>().0 > 7);
+    assert_eq!(
+        app.world().resource::<Issued>().0,
+        1,
+        "one Ticket was ever inserted outside a rollback"
+    );
+}

@@ -116,7 +116,7 @@ where
                     .chain()
                     .in_set(SaveWorldSystems::Snapshot),
             )
-            .add_systems(LoadWorld, Self::load.in_set(LoadWorldSystems::Data));
+            .add_systems(LoadWorld, Self::load.in_set(LoadWorldSystems::ResourceData));
         app.add_observer(
             |_trigger: On<ClearSnapshots>,
              mut snapshots: ResMut<GgrsResourceSnapshots<S::Target, S::Stored>>| {
