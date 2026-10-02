@@ -141,7 +141,10 @@ where
                     .chain()
                     .in_set(SaveWorldSystems::Snapshot),
             );
-        app.add_systems(LoadWorld, Self::load.in_set(LoadWorldSystems::Data));
+        app.add_systems(
+            LoadWorld,
+            Self::load.in_set(LoadWorldSystems::ComponentData),
+        );
         app.add_observer(
             |_trigger: On<ClearSnapshots>,
              mut snapshots: ResMut<GgrsComponentSnapshots<S::Target, S::Stored>>| {
@@ -207,7 +210,10 @@ where
                     .chain()
                     .in_set(SaveWorldSystems::Snapshot),
             )
-            .add_systems(LoadWorld, Self::load.in_set(LoadWorldSystems::Data));
+            .add_systems(
+                LoadWorld,
+                Self::load.in_set(LoadWorldSystems::ComponentData),
+            );
         app.add_observer(
             |_trigger: On<ClearSnapshots>,
              mut snapshots: ResMut<GgrsComponentSnapshots<S::Target, S::Stored>>| {
