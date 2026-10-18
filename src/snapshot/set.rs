@@ -6,7 +6,9 @@
 
 use bevy::prelude::*;
 
-use crate::snapshot::{AdvanceWorld, LoadWorld, SaveWorld};
+use crate::snapshot::{
+    AdvanceWorld, LoadWorld, SaveWorld, StagedInserts, insert_staged_components,
+};
 
 /// Set for ordering systems during the [`LoadWorld`] schedule.
 /// The most common option is [`LoadWorldSystems::Data`], which is where [`Component`]
@@ -34,10 +36,11 @@ pub enum LoadWorldSystems {
     /// NOTE: At this point, [`Entity`] relationships may be broken, see [`LoadWorldSystems::Mapping`]
     /// for when those relationships are fixed.
     Data,
-    /// Flush any deferred operations. Components and resources the load inserts or removes
-    /// land here, and their hooks and observers run: those of a respawned entity's
-    /// components, and those of an immutable component, which a load re-inserts. They read
-    /// resources as the snapshot has them.
+    /// Flush any deferred operations, then insert the components the load systems staged,
+    /// one insert per entity ([`insert_staged_components`]). Components and resources the
+    /// load inserts or removes land here, and their hooks and observers run: those of a
+    /// respawned entity's components, all at once, and those of an immutable component,
+    /// which a load re-inserts. They read resources as the snapshot has them.
     ///
     /// What they write to a resource is restored in [`LoadWorldSystems::ResourceData`].
     /// What they write to a component is not restored again.
@@ -107,6 +110,7 @@ impl Plugin for SnapshotSetPlugin {
     /// Configures the system sets for [`LoadWorld`], [`SaveWorld`], and [`AdvanceWorld`]
     /// and inserts [`ApplyDeferred`] barriers between each adjacent pair.
     fn build(&self, app: &mut App) {
+        app.init_resource::<StagedInserts>();
         app.configure_sets(
             LoadWorld,
             (
@@ -139,7 +143,12 @@ impl Plugin for SnapshotSetPlugin {
             LoadWorld,
             ApplyDeferred.in_set(LoadWorldSystems::EntityFlush),
         )
-        .add_systems(LoadWorld, ApplyDeferred.in_set(LoadWorldSystems::DataFlush))
+        .add_systems(
+            LoadWorld,
+            (ApplyDeferred, insert_staged_components)
+                .chain()
+                .in_set(LoadWorldSystems::DataFlush),
+        )
         .add_systems(
             LoadWorld,
             ApplyDeferred.in_set(LoadWorldSystems::ResourceDataFlush),

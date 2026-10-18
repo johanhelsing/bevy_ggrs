@@ -29,6 +29,7 @@ mod rollback;
 mod rollback_app;
 mod rollback_entity_map;
 mod set;
+mod staged_insert;
 mod strategy;
 
 pub use checksum::*;
@@ -46,6 +47,7 @@ pub use rollback::*;
 pub use rollback_app::*;
 pub use rollback_entity_map::*;
 pub use set::*;
+pub use staged_insert::*;
 pub use strategy::*;
 
 pub mod prelude {
