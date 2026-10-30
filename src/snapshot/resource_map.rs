@@ -88,9 +88,12 @@ impl<R> Plugin for ResourceMapEntitiesPlugin<R>
 where
     R: Resource<Mutability = Mutable> + MapEntities,
 {
-    /// Registers the entity-mapping system for this resource type in [`LoadWorldSystems::Mapping`].
+    /// Registers the entity-mapping system for this resource type in [`LoadWorldSystems::MapEntities`].
     fn build(&self, app: &mut App) {
-        app.add_systems(LoadWorld, Self::update.in_set(LoadWorldSystems::Mapping));
+        app.add_systems(
+            LoadWorld,
+            Self::update.in_set(LoadWorldSystems::MapEntities),
+        );
     }
 }
 

@@ -88,9 +88,12 @@ impl<C> Plugin for ComponentMapEntitiesPlugin<C>
 where
     C: Component<Mutability = Mutable> + MapEntities,
 {
-    /// Registers the entity-mapping system for this component type in [`LoadWorldSystems::Mapping`].
+    /// Registers the entity-mapping system for this component type in [`LoadWorldSystems::MapEntities`].
     fn build(&self, app: &mut App) {
-        app.add_systems(LoadWorld, Self::update.in_set(LoadWorldSystems::Mapping));
+        app.add_systems(
+            LoadWorld,
+            Self::update.in_set(LoadWorldSystems::MapEntities),
+        );
     }
 }
 

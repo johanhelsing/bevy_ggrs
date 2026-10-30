@@ -51,8 +51,26 @@ pub enum LoadWorldSystems {
     /// Update all [`Components`](`Component`) and [`Resources`](`Resource`) to reflect the modified
     /// state of the rollback when compared to the original snapshot. For example, [`Entities`](`Entity`)
     /// which had to be recreated could not use the same ID, so any data referring to that ID is now invalid.
-    /// Once this set completes, all data should now be coherent with the [`World`].
+    /// Once this set completes, all data should now be coherent with the [`World`], and every
+    /// respawned entity is as complete as an app could make it: the set holds, in order,
+    /// [`MapEntities`](Self::MapEntities), [`MapEntitiesFlush`](Self::MapEntitiesFlush),
+    /// [`Respawned`](Self::Respawned) and [`RespawnedFlush`](Self::RespawnedFlush), so a system
+    /// ordered after it sees both.
     Mapping,
+    /// Inside [`Mapping`](Self::Mapping): rewrite every stored [`Entity`] that a respawn changed.
+    MapEntities,
+    /// Flush any deferred operations
+    MapEntitiesFlush,
+    /// Inside [`Mapping`](Self::Mapping): complete the entities
+    /// [`EntitySnapshotPlugin::load`](crate::EntitySnapshotPlugin::load) respawned bare, marked
+    /// [`Respawned`](crate::Respawned): an app that can give one back what it had beyond its
+    /// rolled-back components does it here and takes the mark off. Every snapshot value and
+    /// every entity reference is in place by now.
+    Respawned,
+    /// Inside [`Mapping`](Self::Mapping): flush any deferred operations, then warn about every
+    /// entity still marked [`Respawned`](crate::Respawned): nothing completed it, so it lacks
+    /// whatever it carried beyond its rolled-back components.
+    RespawnedFlush,
 }
 
 /// Set for ordering systems during the [`SaveWorld`] schedule.
@@ -120,6 +138,17 @@ impl Plugin for SnapshotSetPlugin {
                 .chain(),
         )
         .configure_sets(
+            LoadWorld,
+            (
+                LoadWorldSystems::MapEntities,
+                LoadWorldSystems::MapEntitiesFlush,
+                LoadWorldSystems::Respawned,
+                LoadWorldSystems::RespawnedFlush,
+            )
+                .chain()
+                .in_set(LoadWorldSystems::Mapping),
+        )
+        .configure_sets(
             SaveWorld,
             (SaveWorldSystems::Checksum, SaveWorldSystems::Snapshot).chain(),
         )
@@ -146,6 +175,16 @@ impl Plugin for SnapshotSetPlugin {
         .add_systems(
             LoadWorld,
             ApplyDeferred.in_set(LoadWorldSystems::ResourceDataFlush),
+        )
+        .add_systems(
+            LoadWorld,
+            ApplyDeferred.in_set(LoadWorldSystems::MapEntitiesFlush),
+        )
+        .add_systems(
+            LoadWorld,
+            (ApplyDeferred, super::entity::warn_bare_respawns)
+                .chain()
+                .in_set(LoadWorldSystems::RespawnedFlush),
         )
         .add_systems(
             AdvanceWorld,

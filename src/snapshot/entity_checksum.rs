@@ -38,8 +38,10 @@ impl EntityChecksumPlugin {
         // The quantity of active rollback entities must be synced.
         (active_entities.iter().len() as u64).hash(&mut hasher);
 
-        // The quantity of total spawned rollback entities must be synced.
-        (rollback_ordered.len() as u64).hash(&mut hasher);
+        // The quantity of total spawned rollback entities must be synced. Not the table's
+        // length: it forgets an entity when it despawns, and a despawn mark goes for good on
+        // whichever frame a peer stops holding a snapshot from before it.
+        rollback_ordered.issued().hash(&mut hasher);
 
         let result = ChecksumPart(hasher.finish() as u128);
 

@@ -15,6 +15,32 @@ use bevy::{
     prelude::*,
 };
 
+/// On an entity [`EntitySnapshotPlugin::load`] respawned bare: one a snapshot held that the
+/// world no longer had. It gets its rolled-back components and nothing else it carried. An app
+/// that can give it the rest (a generated entity, regrown from what generated it) does so in
+/// [`LoadWorldSystems::Respawned`](crate::LoadWorldSystems::Respawned) and removes the mark;
+/// one still marked after that set is warned about and unmarked. Never in a snapshot.
+#[derive(Component, Debug, Default, Clone, Copy)]
+pub struct Respawned;
+
+/// Warn about each entity still [`Respawned`] once every app had its chance to complete it, and
+/// take the mark off: a rollback entity despawned outright while a snapshot still held it, which
+/// `despawn_rollback` exists to prevent.
+pub(crate) fn warn_bare_respawns(
+    mut commands: Commands,
+    frame: Res<crate::RollbackFrameCount>,
+    respawned: Query<(Entity, &RollbackId), With<Respawned>>,
+) {
+    for (entity, rollback) in &respawned {
+        warn!(
+            "respawned {rollback:?} bare: it was despawned while frame {} still held it; \
+             despawn_rollback keeps every component",
+            frame.0
+        );
+        commands.entity(entity).remove::<Respawned>();
+    }
+}
+
 /// A [`Plugin`] which manages the rollback for [`Entities`](`Entity`). This will ensure
 /// all [`Entities`](`Entity`) match the state of the desired frame, or can be mapped using a
 /// [`RollbackEntityMap`], which this [`Plugin`] will also manage.
@@ -75,7 +101,6 @@ impl EntitySnapshotPlugin {
     ) {
         let mut entity_map = EntityHashMap::<Entity>::default();
 
-        let frame = store.frame();
         let Some(plan) = store.load(
             query.iter().map(|(rollback, _)| rollback.last_changed()),
             query
@@ -114,13 +139,9 @@ impl EntitySnapshotPlugin {
                 // A respawn is bare: it gets the components registered for rollback and
                 // nothing else the entity had. A rollback entity despawned outright
                 // while a snapshot still holds it ends here; `despawn_rollback` marks it
-                // instead, and the mark lifts whole.
-                warn!(
-                    "respawning {rollback:?} bare: it was despawned while frame {} still \
-                     held it; despawn_rollback keeps every component",
-                    frame
-                );
-                let current_entity = commands.spawn((rollback, Rollback)).id();
+                // instead, and the mark lifts whole. An app that can complete it does so
+                // in `LoadWorldSystems::Respawned`, and the rest are warned about after.
+                let current_entity = commands.spawn((rollback, Rollback, Respawned)).id();
                 entity_map.insert(old_entity, current_entity);
             }
         }
