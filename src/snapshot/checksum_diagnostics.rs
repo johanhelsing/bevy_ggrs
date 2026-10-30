@@ -115,10 +115,10 @@ impl ChecksumDiagnostics {
     /// Record a per-type aggregate checksum. Called by checksum plugins via
     /// shared `Res<Self>` access (locks the mutex).
     pub fn record_type_checksum(&self, type_name: &'static str, checksum: u128) {
-        if let Ok(mut pending) = self.pending.lock() {
-            if let Some((_, ref mut detail)) = *pending {
-                detail.type_checksums.insert(type_name, checksum);
-            }
+        if let Ok(mut pending) = self.pending.lock()
+            && let Some((_, ref mut detail)) = *pending
+        {
+            detail.type_checksums.insert(type_name, checksum);
         }
     }
 
@@ -127,12 +127,12 @@ impl ChecksumDiagnostics {
     ///
     /// [`ComponentChecksumPlugin`]: crate::ComponentChecksumPlugin
     pub fn record_entity_hash(&self, type_name: &'static str, rollback_order: u64, hash: u64) {
-        if let Ok(mut pending) = self.pending.lock() {
-            if let Some((_, ref mut detail)) = *pending {
-                detail
-                    .entity_checksums
-                    .insert((rollback_order, type_name), hash);
-            }
+        if let Ok(mut pending) = self.pending.lock()
+            && let Some((_, ref mut detail)) = *pending
+        {
+            detail
+                .entity_checksums
+                .insert((rollback_order, type_name), hash);
         }
     }
 

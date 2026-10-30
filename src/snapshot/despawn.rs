@@ -108,7 +108,7 @@ fn resurrect_entities(
         .filter_map(|(entity, despawned_frame)| {
             // The mark names the first frame whose snapshot lacks the entity, so a load of
             // that frame keeps it and only a load of an earlier frame lifts it.
-            Some(entity).filter(|_e| despawned_frame > rollback_frame)
+            (despawned_frame > rollback_frame).then_some(entity)
         })
         .collect::<Vec<_>>()
         .into_iter()
