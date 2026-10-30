@@ -204,3 +204,51 @@ fn a_respawned_value_is_dropped_exactly_once() {
         "every Counted constructed was dropped once"
     );
 }
+
+/// A respawned entity carries `Respawned` while `LoadWorldSystems::Respawned` runs, with its
+/// snapshot values already written, so an app can give it back what it had beyond them; the
+/// mark is off once the load is done, whether the app took it or the warning did.
+#[test]
+fn a_respawn_is_marked_for_the_app_to_complete() {
+    static COMPLETED: AtomicU32 = AtomicU32::new(0);
+
+    #[derive(Component, Copy, Clone)]
+    struct Key(u32);
+
+    /// What the app gives back: not rolled back, so a bare respawn lacks it.
+    #[derive(Component, Copy, Clone, PartialEq, Debug)]
+    struct Grown(u32);
+
+    fn complete(mut commands: Commands, respawned: Query<(Entity, &Key), With<Respawned>>) {
+        for (entity, key) in &respawned {
+            COMPLETED.fetch_add(1, Ordering::SeqCst);
+            commands
+                .entity(entity)
+                .insert(Grown(key.0 * 10))
+                .remove::<Respawned>();
+        }
+    }
+
+    fn grown_and_unmarked(keys: Query<(&Key, Option<&Grown>, Has<Respawned>)>) {
+        for (key, grown, marked) in &keys {
+            assert_eq!(grown, Some(&Grown(key.0 * 10)), "the app completed it");
+            assert!(!marked, "no mark outlives the load");
+        }
+    }
+
+    let mut app = base_synctest_app(4);
+    app.rollback_component_with_copy::<Key>()
+        .add_systems(LoadWorld, complete.in_set(LoadWorldSystems::Respawned))
+        .add_systems(
+            GgrsSchedule,
+            (grown_and_unmarked, despawn_at_frame_3::<Key>).chain(),
+        );
+    app.world_mut().spawn((Key(4), Grown(40), Rollback));
+
+    run_past_the_respawns(&mut app);
+
+    assert!(
+        COMPLETED.load(Ordering::SeqCst) > 0,
+        "every rollback across frame 3 respawned it"
+    );
+}

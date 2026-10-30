@@ -384,6 +384,7 @@ impl Plugin for SnapshotPlugin {
             );
         app.add_plugins(SnapshotSetPlugin)
             .init_resource::<RollbackOrdered>()
+            .init_resource::<RollbackOrderedPrune>()
             .init_resource::<RollbackFrameCount>()
             .init_resource::<ConfirmedFrameCount>()
             .init_schedule(LoadWorld)
@@ -394,7 +395,11 @@ impl Plugin for SnapshotPlugin {
                 ResourceSnapshotPlugin::<CloneStrategy<RollbackOrdered>>::default(),
                 ChildOfSnapshotPlugin,
                 RollbackDespawnPlugin,
-            ));
+            ))
+            .add_systems(
+                SaveWorld,
+                rollback::prune_rollback_ordered.after(SaveWorldSystems::Snapshot),
+            );
     }
 
     fn finish(&self, app: &mut App) {

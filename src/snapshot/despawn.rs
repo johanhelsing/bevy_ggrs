@@ -382,6 +382,50 @@ mod tests {
         );
     }
 
+    /// A mark that expired, then a load of a frame saved after the mark: that frame's ordering
+    /// table still lists the id. The next prune takes it out.
+    #[test]
+    fn a_load_after_an_expired_mark_leaves_its_id_for_the_prune() {
+        use crate::{RollbackOrdered, RollbackOrderedPrune};
+        let mut app = app();
+        let (entity, _) = marked_at_two(&mut app);
+        let world = app.world_mut();
+        let id = *world.get::<RollbackId>(entity).unwrap();
+        advance_frame(world);
+        save_world(world); // frame 3, after the mark: its table lists the id
+        world.insert_resource(ConfirmedFrameCount(3));
+        advance_frame(world);
+        save_world(world); // frame 4; frames 0 to 2 confirmed away, the mark expires
+        assert!(world.get_entity(entity).is_err());
+        assert!(
+            world
+                .resource::<RollbackOrdered>()
+                .iter_sorted()
+                .all(|i| i != id)
+        );
+        world.resource_mut::<PinnedFrames>().insert(3);
+        load_world(world, 3);
+        assert!(
+            world
+                .resource::<RollbackOrdered>()
+                .iter_sorted()
+                .any(|i| i == id),
+            "the load brought the id back"
+        );
+        let every = world.resource::<RollbackOrderedPrune>().0.unwrap() as i32;
+        while world.resource::<RollbackFrameCount>().0 < every {
+            advance_frame(world);
+            save_world(world);
+        }
+        assert!(
+            world
+                .resource::<RollbackOrdered>()
+                .iter_sorted()
+                .all(|i| i != id),
+            "the prune took it out"
+        );
+    }
+
     #[test]
     fn a_session_reset_despawns_every_mark() {
         let mut app = app();

@@ -34,8 +34,12 @@ pub struct Rollback;
 /// onto a clone. `RollbackId` is an identity, not a value to share. A clone
 /// instead receives a fresh `RollbackId` from `Rollback`'s `on_add` hook
 /// firing on the new entity.
+///
+/// Its entity's despawn takes it out of [`RollbackOrdered`] (`on_remove`): an id
+/// nothing in the world carries is never asked for its order, and a snapshot that holds it
+/// holds its own [`RollbackOrdered`] with it.
 #[derive(Component, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
-#[component(immutable, clone_behavior = Ignore)]
+#[component(immutable, clone_behavior = Ignore, on_remove = on_rollback_id_removed)]
 pub struct RollbackId(Entity);
 
 impl RollbackId {
@@ -67,14 +71,78 @@ fn on_rollback_added(mut world: DeferredWorld, ctx: HookContext) {
     ordered.push(rollback_id);
 }
 
+/// A [`RollbackId`] leaves the world only with its entity, so its order goes with it.
+///
+/// A load that despawns an entity its frame lacked forgets an id that frame's
+/// [`RollbackOrdered`], restored after, never had.
+fn on_rollback_id_removed(mut world: DeferredWorld, ctx: HookContext) {
+    let Some(&rollback) = world.get::<RollbackId>(ctx.entity) else {
+        return;
+    };
+    if let Some(mut ordered) = world.get_resource_mut::<RollbackOrdered>() {
+        ordered.forget(rollback);
+    }
+}
+
+/// How many frames apart [`RollbackOrdered`] drops ids no entity carries: a load of a frame
+/// saved before a despawn can bring a forgotten id back (see [`prune_rollback_ordered`]), and
+/// the table then holds at most what that many frames' loads restored. A game that spawns and
+/// despawns many short-lived rollback entities may want it shorter.
+///
+/// Defaults to `Some(128)`. `None` never prunes.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RollbackOrderedPrune(pub Option<u32>);
+
+impl Default for RollbackOrderedPrune {
+    fn default() -> Self {
+        Self(Some(128))
+    }
+}
+
+/// Every [`RollbackOrderedPrune`] frames, after the save, drop from
+/// [`RollbackOrdered`] every id no entity in the world carries.
+///
+/// A despawn forgets its id, but a frame saved before the despawn holds a table with the id
+/// in it: a despawn mark lets go of its entity once no frame from before the mark is held,
+/// while frames from after it, which still list the id, may be. A load of one of those brings
+/// the id back, and no entity is left to take it out. Which ids the table holds is not
+/// simulated state (numbers never move, and the entity checksum hashes
+/// [`issued`](RollbackOrdered::issued)), so this may run on any frame, on any peer.
+pub(crate) fn prune_rollback_ordered(
+    frame: Res<crate::RollbackFrameCount>,
+    prune: Res<RollbackOrderedPrune>,
+    mut ordered: ResMut<RollbackOrdered>,
+    carried: Query<&RollbackId, bevy::ecs::query::Allow<crate::RollbackDespawned>>,
+) {
+    let Some(every) = prune.0 else {
+        return;
+    };
+    if frame.0.rem_euclid(every.max(1) as i32) != 0 {
+        return;
+    }
+    let live: bevy::platform::collections::HashSet<RollbackId> = carried.iter().copied().collect();
+    // Copied only when something goes.
+    if ordered.order.keys().all(|id| live.contains(id)) {
+        return;
+    }
+    Arc::make_mut(&mut ordered.order).retain(|id, _| live.contains(id));
+}
+
 /// A [`Resource`] which provides methods for stable ordering of [`RollbackId`] components.
 ///
-/// Snapshotted every frame and changed only by a spawn, so a clone shares the
-/// data and a [`push`](Self::push) copies it.
+/// Every id gets the next number when it is first registered and keeps it while its entity is
+/// in the world. A despawn forgets it, so the table holds the rollback entities there are, not
+/// every one there ever was: a session that keeps spawning and despawning (a field whose far
+/// rocks dehydrate) keeps it, and each snapshot of it, the size of the world. The numbers do
+/// not move when one is forgotten, so they stay what every peer agrees on.
+///
+/// Snapshotted every frame and changed only by a spawn or a despawn, so a clone shares the
+/// data and a [`push`](Self::push) or a forget copies it.
 #[derive(Resource, Default, Clone)]
 pub struct RollbackOrdered {
     order: Arc<HashMap<RollbackId, u64>>,
-    sorted: Arc<Vec<RollbackId>>,
+    /// The number the next id registered gets.
+    next: u64,
 }
 
 impl RollbackOrdered {
@@ -84,16 +152,26 @@ impl RollbackOrdered {
         if self.order.contains_key(&rollback) {
             return self;
         }
-        let sorted = Arc::make_mut(&mut self.sorted);
-        sorted.push(rollback);
-        Arc::make_mut(&mut self.order).insert(rollback, sorted.len() as u64 - 1);
+        Arc::make_mut(&mut self.order).insert(rollback, self.next);
+        self.next += 1;
 
         self
     }
 
-    /// Iterate over all [`RollbackId`] markers ever registered, even if they have since been deleted.
+    /// Forget `rollback`: its entity left the world. Its number is never given again.
+    fn forget(&mut self, rollback: RollbackId) {
+        if self.order.contains_key(&rollback) {
+            Arc::make_mut(&mut self.order).remove(&rollback);
+        }
+    }
+
+    /// Iterate over every registered [`RollbackId`] in order: those whose entity is in the
+    /// world, marked despawned or not.
     pub fn iter_sorted(&self) -> impl Iterator<Item = RollbackId> + '_ {
-        self.sorted.iter().copied()
+        let mut sorted: Vec<(u64, RollbackId)> =
+            self.order.iter().map(|(&id, &order)| (order, id)).collect();
+        sorted.sort_unstable();
+        sorted.into_iter().map(|(_, id)| id)
     }
 
     /// Returns a unique and order stable index for the provided [`RollbackId`].
@@ -104,7 +182,15 @@ impl RollbackOrdered {
             .expect("RollbackId was not registered in RollbackOrdered!")
     }
 
-    /// Get the number of registered rollback entities.
+    /// How many ids have been registered, forgotten ones included: the number the next one
+    /// gets. Rolled back with the table, so every peer agrees on it, where they need not agree
+    /// on [`len`](Self::len) while a despawn mark is held on one and gone on the other.
+    pub fn issued(&self) -> u64 {
+        self.next
+    }
+
+    /// Get the number of registered rollback entities: those whose entity is in the world,
+    /// marked despawned or not.
     pub fn len(&self) -> usize {
         self.order.len()
     }
@@ -197,6 +283,45 @@ mod tests {
         assert_ne!(
             source_rid, clone_rid,
             "clone must have a unique RollbackId, got the source's id"
+        );
+    }
+
+    /// A forgotten id takes no number with it: the next id gets the next number, and the
+    /// others keep theirs.
+    #[test]
+    fn forget_keeps_every_other_number() {
+        let mut ro = ordered_with(&[10, 20, 30]);
+        ro.forget(id(20));
+        assert_eq!(ro.len(), 2);
+        assert_eq!(ro.issued(), 3);
+        ro.push(id(40));
+        assert_eq!(ro.order(id(10)), 0);
+        assert_eq!(ro.order(id(30)), 2);
+        assert_eq!(ro.order(id(40)), 3);
+        let got: Vec<RollbackId> = ro.iter_sorted().collect();
+        assert_eq!(got, vec![id(10), id(30), id(40)]);
+    }
+
+    /// A despawn forgets its entity's id; a snapshot taken before keeps it.
+    #[test]
+    fn a_despawn_forgets_the_id() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(SnapshotPlugin);
+        let kept = app.world_mut().spawn(Rollback).id();
+        let gone = app.world_mut().spawn(Rollback).id();
+        app.update();
+        let gone_id = *app.world().get::<RollbackId>(gone).unwrap();
+        let before = app.world().resource::<RollbackOrdered>().clone();
+        app.world_mut().entity_mut(gone).despawn();
+        let ordered = app.world().resource::<RollbackOrdered>();
+        assert_eq!(ordered.len(), 1);
+        let kept_id = *app.world().get::<RollbackId>(kept).unwrap();
+        assert_eq!(ordered.order(kept_id), 0);
+        assert_eq!(
+            before.order(gone_id),
+            1,
+            "the clone a snapshot holds keeps it"
         );
     }
 
